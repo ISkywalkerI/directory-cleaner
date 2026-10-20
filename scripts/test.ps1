@@ -16,6 +16,12 @@ $sources = Get-ChildItem cmd,internal -Filter '*.go' -File -Recurse
 $unformatted = & gofmt -l @($sources.FullName)
 if ($LASTEXITCODE -ne 0 -or $unformatted) { throw "Run gofmt on: $unformatted" }
 Invoke-Go vet ./...
+foreach ($script in (Get-ChildItem scripts,deploy -Filter '*.ps1' -File -Recurse)) {
+    $parseTokens = $null
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$parseTokens, [ref]$parseErrors) | Out-Null
+    if ($parseErrors) { throw "PowerShell parse failed: $($script.FullName): $parseErrors" }
+}
 # JSON includes pass/fail/skip events; coverage is collected in the same uncached run.
 & go test -count=1 -timeout=3m -json '-coverprofile=artifacts/coverage.out' ./... | Tee-Object -FilePath artifacts/tests.jsonl
 if ($LASTEXITCODE -ne 0) { throw 'go test failed' }
