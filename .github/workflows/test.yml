@@ -33,6 +33,22 @@ jobs:
       - name: Ubuntu tests and race detector
         if: runner.os == 'Linux'
         run: bash scripts/test.sh
+      - name: Windows NSSM service acceptance
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force artifacts/tools | Out-Null
+          # Fixed Chocolatey package embeds the upstream NSSM archive; verify its published SHA256.
+          Invoke-WebRequest 'https://community.chocolatey.org/api/v2/package/nssm/2.24.101.20180116' -OutFile artifacts/tools/package.zip
+          Expand-Archive artifacts/tools/package.zip artifacts/tools/package
+          $archive = Get-Item artifacts/tools/package/tools/nssm-2.24-101-g897c7ad.zip
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne '99F5045FFFBFFB745D67FE3A065A953C4A3D9C253B868892D9B685B0EE7D07B8') { throw 'NSSM checksum mismatch' }
+          Expand-Archive $archive artifacts/tools/nssm
+          ./scripts/test-nssm.ps1 -Nssm artifacts/tools/nssm/nssm-2.24-101-g897c7ad/win64/nssm.exe
+      - name: Ubuntu systemd service acceptance
+        if: runner.os == 'Linux' && matrix.go == '1.25.12'
+        run: sudo bash scripts/test-systemd.sh
       - name: Keep test reports (including skips)
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -41,6 +57,8 @@ jobs:
           path: |
             artifacts/*.jsonl
             artifacts/coverage.out
+            artifacts/nssm/
+            artifacts/systemd/
           if-no-files-found: warn
           retention-days: 14
 

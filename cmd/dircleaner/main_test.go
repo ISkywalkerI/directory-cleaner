@@ -19,6 +19,9 @@ import (
 var testBinary string
 
 func TestMain(m *testing.M) {
+	if os.Getenv("DIRCLEANER_INTERRUPT_PID") != "" {
+		os.Exit(m.Run())
+	}
 	dir, err := os.MkdirTemp("", "dircleaner-cli-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -182,6 +185,7 @@ func TestCLIInvalidArgumentsAndConfig(t *testing.T) {
 func TestCLIContinuous(t *testing.T) {
 	cfg, audit, data := cliFixture(t, "", true)
 	cmd := exec.Command(testBinary, "-config", cfg)
+	configureConsole(cmd)
 	var output bytes.Buffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
@@ -208,19 +212,13 @@ func TestCLIContinuous(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if runtime.GOOS == "windows" {
-		// shortcut: os.Interrupt is unsupported for Windows child processes; NSSM stop is checked on deployment.
-		t.Log("Windows: verified repeated scans; killing child for cleanup; graceful service stop requires manual NSSM acceptance")
-		if err := cmd.Process.Kill(); err != nil {
-			t.Fatal(err)
-		}
-	} else if err := cmd.Process.Signal(os.Interrupt); err != nil {
+	if err := interruptConsole(cmd); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case err := <-wait:
 		stopped = true
-		if runtime.GOOS != "windows" && err != nil {
+		if err != nil {
 			t.Fatalf("unclean exit: %v\n%s", err, output.String())
 		}
 	case <-time.After(5 * time.Second):
