@@ -1,0 +1,20 @@
+version: 1
+
+defaults:
+  scan_interval: 5m
+  stable_for: 2m
+  min_age: 10m
+  max_workers: 1
+  dry_run: true
+  audit_log: logs/directory-cleaner.jsonl
+
+directories:
+  - name: rundata
+    path: C:/3Dshape/app/rundata
+    trigger_bytes: 100GB
+    target_bytes: 80GB
+
+  - name: csvdata
+    path: C:/3Dshape/app/csvdata
+    trigger_bytes: 100GB
+    target_bytes: 80GB

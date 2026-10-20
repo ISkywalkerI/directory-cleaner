@@ -1,0 +1,18 @@
+[Unit]
+Description=Directory Cleaner
+After=local-fs.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/directory-cleaner
+ExecStart=/opt/directory-cleaner/dircleaner -config /etc/directory-cleaner/config.yaml
+Restart=on-failure
+RestartSec=10
+User=directory-cleaner
+Group=directory-cleaner
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/var/log/directory-cleaner
+
+[Install]
+WantedBy=multi-user.target

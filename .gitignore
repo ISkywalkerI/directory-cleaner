@@ -1,0 +1,12 @@
+# Local configuration, logs and generated output
+/directory-cleaner.yaml
+/logs/
+*.log
+/.testcache/
+/.modcache/
+/artifacts/
+/.tmp-*
+/dircleaner
+/dircleaner.exe
+*.test
+coverage.out
