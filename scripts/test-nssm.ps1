@@ -75,6 +75,8 @@ New-Item -ItemType Directory -Path $data -Force | Out-Null
 New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
 try {
     Copy-Item -LiteralPath $exePath -Destination (Join-Path $root 'dircleaner.exe')
+    New-Item -ItemType Directory -Path (Join-Path $root 'tools') | Out-Null
+    Copy-Item -LiteralPath $nssmPath -Destination (Join-Path $root 'tools/nssm.exe')
     for ($i = 0; $i -lt 3; $i++) {
         $file = Join-Path $data @('old', 'middle', 'new')[$i]
         [IO.File]::WriteAllText($file, '1234')
@@ -83,7 +85,7 @@ try {
     Write-Config $true
     Assert ($null -eq (Get-Service $name -ErrorAction SilentlyContinue)) 'Test service already exists'
     $installed = $true
-    & (Join-Path $PSScriptRoot '../deploy/install-nssm.ps1') -Root $root -ServiceName $name -Nssm $nssmPath
+    & (Join-Path $PSScriptRoot '../deploy/install-nssm.ps1') -Root $root -ServiceName $name
     Assert ((Get-Service $name).Status -eq 'Running') 'Service installation/start failed'
     # Only Ctrl+C may stop this test service; forced NSSM fallbacks must not hide a broken handler.
     Invoke-Nssm set $name AppStopMethodSkip 14

@@ -19,9 +19,11 @@ jobs:
           - os: ubuntu-22.04
             go: '1.21.13'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go }}
@@ -33,22 +35,34 @@ jobs:
       - name: Ubuntu tests and race detector
         if: runner.os == 'Linux'
         run: bash scripts/test.sh
+      - name: Build and verify release packages
+        if: matrix.go == '1.25.12'
+        shell: pwsh
+        run: |
+          ./scripts/build.ps1 | Set-Content artifacts/release-path.txt
+          if (-not $?) { throw 'Release build failed' }
+          ./scripts/test-release.ps1 -ReleaseDirectory (Get-Content artifacts/release-path.txt)
+      - name: Keep release packages
+        if: matrix.go == '1.25.12'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ matrix.os }}
+          path: |
+            artifacts/releases/*/*.zip
+            artifacts/releases/*/*.tar.gz
+            artifacts/releases/*/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
       - name: Windows NSSM service acceptance
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force artifacts/tools | Out-Null
-          # Fixed Chocolatey package embeds the upstream NSSM archive; verify its published SHA256.
-          Invoke-WebRequest 'https://community.chocolatey.org/api/v2/package/nssm/2.24.101.20180116' -OutFile artifacts/tools/package.zip
-          Expand-Archive artifacts/tools/package.zip artifacts/tools/package
-          $archive = Get-Item artifacts/tools/package/tools/nssm-2.24-101-g897c7ad.zip
-          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne '99F5045FFFBFFB745D67FE3A065A953C4A3D9C253B868892D9B685B0EE7D07B8') { throw 'NSSM checksum mismatch' }
-          Expand-Archive $archive artifacts/tools/nssm
-          ./scripts/test-nssm.ps1 -Nssm artifacts/tools/nssm/nssm-2.24-101-g897c7ad/win64/nssm.exe
+          $root = Join-Path (Get-Content artifacts/release-path.txt) 'windows-amd64/directory-cleaner'
+          ./scripts/test-nssm.ps1 -Nssm "$root/tools/nssm.exe" -Exe "$root/dircleaner.exe"
       - name: Ubuntu systemd service acceptance
         if: runner.os == 'Linux' && matrix.go == '1.25.12'
-        run: sudo bash scripts/test-systemd.sh
+        run: sudo bash scripts/test-systemd.sh "$(cat artifacts/release-path.txt)/linux-amd64/directory-cleaner/dircleaner"
       - name: Keep test reports (including skips)
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -100,3 +114,26 @@ jobs:
           NATIVE: ${{ needs.native.result }}
           CROSS_BUILD: ${{ needs.cross-build.result }}
         run: test "$NATIVE" = success && test "$CROSS_BUILD" = success
+
+  release:
+    name: Publish tagged release
+    needs: [ci]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Publish packages from this tested run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" --name release-windows-2022 --dir assets
+          cd "$(dirname "$(find assets -name SHA256SUMS -print -quit)")"
+          sha256sum -c SHA256SUMS
+          gh release create "$RELEASE_TAG" --verify-tag --generate-notes --draft ./*.zip ./*.tar.gz SHA256SUMS
+          gh release edit "$RELEASE_TAG" --draft=false

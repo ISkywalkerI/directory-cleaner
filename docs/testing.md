@@ -11,6 +11,7 @@
 | Windows 服务 | 管理员 `pwsh -File scripts/test-nssm.ps1 -Nssm <nssm.exe路径>` | 在 Windows Server 2022 实际安装唯一临时 NSSM 服务，验证预演、stop/start/restart、崩溃后恢复、优雅取消、真实删除、卸载；禁用窗口/线程消息和强制终止兜底，子进程必须退出码 0 |
 | Ubuntu 服务 | `sudo bash scripts/test-systemd.sh` | 在 Ubuntu 22.04/24.04 实际安装仓库 unit（只替换测试路径和专用账号），验证 enable、启动、停止、重启、异常恢复、取消审计、真实删除和卸载；必须使用真实 systemd，停止后退出状态和 Result 均正常 |
 | 交叉编译 | 脚本交叉编译参数或 CI Build only 作业 | Windows/Linux × amd64/arm64 全部编译成功；只证明可构建 |
+| 发布包 | `pwsh -File scripts/build.ps1` 和 `pwsh -File scripts/test-release.ps1 -ReleaseDirectory <版本目录>` | 三目标架构、静态 Linux、CGO、版本、SHA256、严格文件清单、tar 执行权限通过；本机包解压后版本查询、启动预演、空格路径、任意工作目录、配置和审计保留通过 |
 | 合并门禁 | GitHub Actions `CI` | 所有矩阵作业 success；失败、取消和跳过作业均不能放行 |
 
 脚本只检查格式；需要修正时执行 `gofmt`。不设覆盖率百分比门槛，报告用于发现遗漏。测试使用独立临时目录和审计文件。`-count=1` 避免缓存掩盖本次结果，单次测试超时 3 分钟。JSONL 测试报告包含用例输出与 pass/fail/skip，覆盖率在 `artifacts/coverage.out`；CI 保留报告 14 天。

@@ -162,6 +162,7 @@ func TestCLIInvalidArgumentsAndConfig(t *testing.T) {
 		{"invalid", []string{"-config", bad}, 2, "unsupported config version"},
 		{"unknown", []string{"-unknown"}, 2, "flag provided but not defined"},
 		{"help", []string{"-h"}, 0, "Usage"},
+		{"version without config", []string{"-version", "-config", cfg + "-missing"}, 0, "dircleaner dev commit=unknown built=unknown platform=" + runtime.GOOS + "/" + runtime.GOARCH},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
