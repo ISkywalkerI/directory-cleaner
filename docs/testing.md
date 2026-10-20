@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | 配置和内部清理 | `go test ./...` | 默认预演、继承/覆盖、字节范围、非法配置、触发阈值、递归、旧文件优先、目标停止、年龄、稳定性、删除前复核、取消、符号链接和 JSONL 审计通过 |
 | 真实 CLI | 同一 Go 测试命令 | 编译真实二进制，验证默认预演、`-dry-run`/`-execute`、配置删除、错误退出码、Unicode/空格路径、重复扫描和退出 |
-| Windows 原生 | `pwsh -File scripts/test.ps1` | Go 1.25.12，格式、依赖校验、vet、测试、覆盖率、构建；真实文件锁保护通过 |
+| Windows 原生 | `pwsh -File scripts/test.ps1` | Go 1.25.12，格式、PowerShell 脚本语法、依赖校验、vet、测试、覆盖率、构建；真实文件锁保护通过 |
 | Ubuntu 原生 | `bash scripts/test.sh` | Ubuntu 22.04/24.04 + Go 1.25.12，额外 Ubuntu 22.04 + Go 1.21.13；包括权限、FIFO 和 race 检查 |
 | 交叉编译 | 脚本交叉编译参数或 CI Build only 作业 | Windows/Linux × amd64/arm64 全部编译成功；只证明可构建 |
 | 合并门禁 | GitHub Actions `CI` | 所有矩阵作业 success；失败、取消和跳过作业均不能放行 |

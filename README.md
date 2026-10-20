@@ -35,7 +35,7 @@ sudo systemctl enable --now directory-cleaner.service
 
 ## 审计
 
-`audit_log` 为 JSONL 文件。每次扫描写入 summary；预演或成功删除的每个文件另写一条 delete 事件；锁定、权限不足、文件变化和删除失败会写入 failures。
+`audit_log` 为 JSONL 文件，必须位于清理目录之外。未超过触发值时写入 scan，触发清理后写入 summary；预演或成功删除的每个文件另写一条 delete 事件；锁定、权限不足、文件变化和删除失败会写入 failures。预演只列出达到目标容量所需的文件，summary 的 after_bytes 仍反映实际容量，删除数量为零。
 
 ## 开发和测试
 
