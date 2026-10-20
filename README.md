@@ -58,6 +58,6 @@ bash scripts/test.sh --cross-compile
 
 省略交叉编译参数只执行本机检查。报告在 `artifacts/`；测试通过 Go 标准库创建临时目录，调用真实二进制验证预演、删除和连续运行，不读取实际业务配置。
 
-每次 push、PR 和手动触发均运行 Windows Server 2022、Ubuntu 22.04/24.04 x64 原生测试，额外校验 Go 1.21.13，并编译 Windows/Linux 的 amd64/arm64。`CI` 汇总检查是合并门禁。ARM64 仅验证可构建。
+每次 push、PR 和手动触发均运行 Windows Server 2022、Ubuntu 22.04/24.04 x64 原生测试，额外校验 Go 1.21.13，并编译 Windows/Linux 的 amd64/arm64。Windows 连续运行测试发送真实 Ctrl+Break 并要求正常退出。CI 还会实际安装临时 NSSM/systemd 服务，验证预演、启停、重启、异常恢复、优雅取消、真实删除和卸载；NSSM 禁用强制终止兜底。`CI` 汇总检查是合并门禁。ARM64 仅验证可构建。
 
 测试矩阵、跳过项和 NSSM/systemd 部署验收见 [全流程测试与部署验收](docs/testing.md)。较大修改必须补回归测试并通过完整 CI 后才可部署。
