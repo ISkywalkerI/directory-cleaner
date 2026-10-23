@@ -42,12 +42,12 @@ Windows 的 `-ExecutionPolicy Bypass` 仅作用于当前启动进程，不修改
 
 ```powershell
 .\deploy\install-nssm.ps1 -Root C:\Apps\directory-cleaner
-Get-Service OiSmart3D-DirectoryCleaner
-Stop-Service OiSmart3D-DirectoryCleaner
-Start-Service OiSmart3D-DirectoryCleaner
-Restart-Service OiSmart3D-DirectoryCleaner
+Get-Service DirectoryCleaner
+Stop-Service DirectoryCleaner
+Start-Service DirectoryCleaner
+Restart-Service DirectoryCleaner
 # 卸载前停止服务；不删除配置、日志和业务数据
-.\tools\nssm.exe remove OiSmart3D-DirectoryCleaner confirm
+.\tools\nssm.exe remove DirectoryCleaner confirm
 ```
 
 安装脚本默认使用随包 NSSM，可用 `-Nssm`、`-Config`、`-ServiceName` 指定工具、配置和服务名。服务日志在 `logs/service.out.log`、`logs/service.err.log`。根据现场 ACL 配置服务账号，验证真实停止时审计已写完。

@@ -36,7 +36,131 @@ dircleaner -config directory-cleaner.yaml -once -execute
 
 配置默认 `dry_run: true`。先查看 `audit_log` 中的预演记录，确认路径后把配置改为 `dry_run: false`，或仅在手工执行时使用 `-execute`。
 
-容量值支持字节以及 `KB`、`MB`、`GB`、`TB` 后缀，例如 `100GB`。`trigger_bytes` 必须大于 `target_bytes`；目录超过触发上限后，按修改时间从旧到新删除，直到低于目标值。
+## 配置文件说明
+
+配置文件是 YAML 格式，通常由 `version`、`defaults` 和 `directories` 三部分组成。第一次部署时，建议复制 `directory-cleaner.yaml.example`，再只修改路径、容量阈值和审计日志路径。
+
+### 完整结构
+
+```yaml
+version: 1
+
+defaults:
+  scan_interval: 5m
+  stable_for: 2m
+  min_age: 10m
+  max_workers: 1
+  dry_run: true
+  audit_log: logs/directory-cleaner.jsonl
+
+directories:
+  - name: rundata
+    path: C:/3Dshape/app/rundata
+    trigger_bytes: 100GB
+    target_bytes: 80GB
+```
+
+`defaults` 中的设置会被所有目录继承；某个目录在自己的列表项中重新填写同名参数时，以目录自己的值为准。例如：
+
+```yaml
+defaults:
+  scan_interval: 5m
+  stable_for: 2m
+  max_workers: 1
+
+directories:
+  - name: fast-data
+    path: C:/data/fast
+    trigger_bytes: 10GB
+    target_bytes: 8GB
+    scan_interval: 30s   # 只覆盖 fast-data 的扫描周期
+    stable_for: 0s       # 只覆盖 fast-data 的稳定观察时间
+    max_workers: 4       # 只覆盖 fast-data 的并发检查数
+```
+
+### 顶层参数
+
+| 参数 | 用途和填写规则 |
+| --- | --- |
+| `version` | 配置格式版本。当前必须填写 `1`。 |
+| `defaults` | 所有目录的公共默认设置。每个目录可以覆盖其中的设置。 |
+| `directories` | 要清理的目录列表，至少填写一项。每个目录单独统计容量和执行清理。 |
+
+### `defaults` 和目录参数
+
+| 参数 | 用途 | 示例和规则 |
+| --- | --- | --- |
+| `name` | 目录的标识名称，会写入审计日志。 | `name: rundata`；不能重复。省略时自动生成 `directory-1`、`directory-2`。 |
+| `path` | 要递归扫描的根目录。 | `path: C:/3Dshape/app/rundata`；建议使用绝对路径。程序只处理普通文件，不跟随符号链接。 |
+| `scan_interval` | 连续运行时两次扫描的目标间隔。程序启动后会立即扫描一次。 | `30s` 表示 30 秒，`5m` 表示 5 分钟，`1h` 表示 1 小时；也支持 `ms` 等 Go duration 单位；必须大于 0。 |
+| `stable_for` | 文件稳定性观察时间。等待后再次比较文件大小和修改时间。 | `2m` 表示观察 2 分钟；`0s` 表示不等待，但仍会执行复核和访问检查；不能为负数。 |
+| `min_age` | 文件最后修改后必须经过的最短时间。 | `10m` 表示至少 10 分钟未修改；`0s` 表示不设置年龄门槛；不能为负数。 |
+| `max_workers` | 同一目录进行稳定性检查时的并发 worker 数。 | `4` 表示最多并发检查 4 个文件；必须至少为 1。它不表示并发删除数量。 |
+| `dry_run` | 是否只预演而不实际删除。 | `true` 是安全默认值；`false` 才允许配置本身执行真实删除。命令行 `-dry-run` 或 `-execute` 可以覆盖所有目录。 |
+| `audit_log` | JSONL 审计日志路径。 | `logs/directory-cleaner.jsonl`；必须位于所有清理目录之外。相对路径相对于程序启动时的工作目录。 |
+| `trigger_bytes` | 目录普通文件大小合计超过此值时才开始清理。 | `100GB`；必须严格大于 `target_bytes`。 |
+| `target_bytes` | 开始清理后希望达到的剩余容量。 | `80GB`；必须满足 `trigger_bytes > target_bytes >= 0`。程序按最后修改时间从旧到新考虑文件。 |
+
+### 时间单位
+
+时间参数使用 Go duration 格式，数字后面必须跟单位：
+
+| 写法 | 含义 |
+| --- | --- |
+| `500ms` | 500 毫秒 |
+| `30s` | 30 秒 |
+| `5m` | 5 分钟 |
+| `2h` | 2 小时 |
+| `24h` | 24 小时 |
+
+因此，`scan_interval: 30s` 表示程序在连续运行时大约每 30 秒发起一次该目录的扫描；它不是 30 分钟，也不是 30 个文件。`stable_for: 30s` 的含义不同，它表示每个候选文件需要观察 30 秒，确认大小和修改时间没有变化。
+
+### 容量单位
+
+容量参数支持纯数字和以下后缀：
+
+| 写法 | 含义 |
+| --- | --- |
+| `1048576` | 1,048,576 字节 |
+| `1KB` | 1,024 字节 |
+| `1MB` | 1,024 × 1,024 字节 |
+| `1GB` | 1,024³ 字节 |
+| `1TB` | 1,024⁴ 字节 |
+
+后缀不区分大小写，也可以写小数，例如 `1.5GB`。当前支持 `KB`、`MB`、`GB`、`TB`，不支持 `KiB`、`MiB` 等其他写法。
+
+### 清理阈值示例
+
+```yaml
+trigger_bytes: 100GB
+target_bytes: 80GB
+```
+
+含义是：目录普通文件大小合计为 `100GB` 时**还不会**清理，必须严格超过 `100GB` 才触发；触发后按文件最后修改时间从旧到新删除，直到剩余估算容量小于等于 `80GB`。由于程序按完整文件删除，最终容量可能低于 `80GB`。
+
+如果总量没有超过 `trigger_bytes`，即使某个文件很老，也不会因为年龄条件单独被删除。`min_age` 和 `stable_for` 是删除前的保护条件，不是独立的定时删除策略。
+
+### 预演与真实删除
+
+推荐的首次运行方式：
+
+```powershell
+Copy-Item directory-cleaner.yaml.example directory-cleaner.yaml
+# 编辑 directory-cleaner.yaml，先保持 dry_run: true
+go run ./cmd/dircleaner -config directory-cleaner.yaml -once -dry-run
+```
+
+检查 `audit_log` 中的 `delete` 和 `summary` 事件，确认扫描路径、文件顺序和预计容量后，再选择以下一种方式执行：
+
+```text
+# 配置文件中设置 dry_run: false
+dircleaner -config directory-cleaner.yaml -once
+
+# 或者只对本次运行强制真实删除
+dircleaner -config directory-cleaner.yaml -once -execute
+```
+
+`-dry-run` 与 `-execute` 不能同时使用；命令行覆盖会作用于所有配置目录。真实删除使用操作系统的文件删除调用，没有回收站和恢复功能。
 
 程序递归扫描普通文件，不跟随符号链接。文件必须超过 `min_age`，并在 `stable_for` 观察期间大小和修改时间保持不变；Windows 还会尝试独占打开文件。Linux 无法从普通系统调用可靠判断其他进程是否持有文件，因此只能通过年龄和稳定性降低风险。
 

@@ -1,6 +1,6 @@
 param(
     [string]$Root = (Split-Path -Parent $PSScriptRoot),
-    [string]$ServiceName = "OiSmart3D-DirectoryCleaner",
+    [string]$ServiceName = "DirectoryCleaner",
     [string]$Nssm = "",
     [string]$Config = ""
 )
