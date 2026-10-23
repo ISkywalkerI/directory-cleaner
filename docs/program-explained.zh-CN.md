@@ -881,7 +881,7 @@ Get-ChildItem -LiteralPath $lessonData -File | Select-Object Name, Length
 | Windows 锁定文件测试 | 本机已通过 | 测试构造的文件共享冲突受到保护 |
 | `go vet ./...` | 退出码 0 | 本次静态检查未报告问题 |
 | `pwsh -NoProfile -File scripts/test.ps1 -CrossCompile` | 退出码 0；模块校验、格式检查、测试、构建和四个交叉编译目标均通过 | 当前 Windows 环境的完整本地门禁通过；两个符号链接测试因权限跳过 |
-| PR #2 远端检查 | 2026-10-20 的上一提交检查全部通过 | 目标平台和服务验收由 GitHub Actions 负责；本次提交推送后需重新确认 |
+| PR #2 远端检查 | 提交 `fda9316` 的 Windows/Ubuntu 原生测试、Go 1.21.13 兼容性、四个交叉编译目标和汇总 `CI` 均通过（2026-10-23） | 目标平台和服务验收由 GitHub Actions 负责；发布任务因非 tag 提交而跳过 |
 | 单独构建二进制并运行三文件教学预演 | 已通过断言 | 计划顺序 old、middle；保留 3 文件；summary `12 -> 12`、真实删除 0 |
 
 测试初次尝试因默认缓存目录不可写而未启动；改用仓库可写缓存后，又遇到 Go 默认模块代理连接超时；最终复用仓库已有 `.testcache` 与 `.modcache`，设置 `GOPROXY=off`，运行成功。这些环境失败不是已通过测试，表格中的通过指最后一次成功执行。
@@ -921,4 +921,4 @@ go vet ./...
 | 配置更新 | 启动读取一次；修改后重启生效 |
 | 自动恢复 | 服务管理器处理进程失败；不会自动修复 ACL、路径错误或业务侧持续写入 |
 
-本地完整门禁不等于目标机器验收；目标机器账号、权限、开机行为和 ARM64 原生运行仍需按 [testing.md](testing.md) 验证。PR 合并前必须以当前提交对应的 GitHub Actions 检查为准。
+本地和 PR 门禁不等于目标机器验收；目标机器账号、权限、开机行为和 ARM64 原生运行仍需按 [testing.md](testing.md) 验证。
