@@ -1,3 +1,44 @@
+# Directory Cleaner 配置说明
+#
+# 一、文件结构
+# version：配置格式版本，当前必须为 1。
+# defaults：所有目录的公共默认值。directories 中的目录可以覆盖同名参数。
+# directories：要扫描和清理的目录列表，至少需要一个目录。
+#
+# 二、defaults 参数
+# scan_interval：连续运行时的扫描周期。程序启动后会立即扫描一次。
+#   使用 Go duration 格式：30s=30 秒，5m=5 分钟，1h=1 小时，也支持 ms 等单位。
+#   必须大于 0。
+# stable_for：稳定性观察时间。等待后再次比较文件大小和修改时间。
+#   0s 表示不等待，但仍会执行访问检查和删除前复核；不能为负数。
+# min_age：文件最小年龄。文件最后修改时间距现在至少达到该时长，才会进入清理检查。
+#   例如 10m 表示至少 10 分钟未修改；可以填写 0s，但不能为负数。
+# max_workers：同一目录执行稳定性检查时的并发 worker 数，必须至少为 1。
+#   它只控制检查并发数，不表示并发删除数量。
+# dry_run：是否预演。true 表示只记录计划删除的文件，不真正删除；默认应保持 true。
+#   确认审计日志和路径无误后，可以改为 false，或使用命令行 -execute。
+# audit_log：JSONL 审计日志路径，必须位于所有清理目录之外。
+#   相对路径相对于程序启动时的工作目录，而不是相对于本 YAML 文件。
+#
+# 三、directories 中每个目录的参数
+# name：目录在审计日志中的名称，不能重复；省略时自动生成 directory-1、directory-2……。
+# path：要递归扫描的根目录。程序只处理普通文件，不跟随符号链接。
+#   Windows 可写 C:/3Dshape/app/rundata，Linux 建议写 /srv/3Dshape/app/rundata。
+# trigger_bytes：目录普通文件大小合计严格超过此值时，才开始清理。
+#   支持字节数字及 KB、MB、GB、TB 后缀，例如 100GB；后缀不区分大小写。
+# target_bytes：开始清理后希望达到的剩余容量。
+#   程序按最后修改时间从旧到新考虑文件，直到剩余估算容量 <= target_bytes。
+#   必须满足 trigger_bytes > target_bytes >= 0。
+#
+# 四、参数继承规则
+# 目录未填写的参数继承 defaults；目录填写的同名参数覆盖 defaults。
+# 例如可以只为某个目录填写 scan_interval: 30s 或 max_workers: 4。
+# 命令行 -dry-run 和 -execute 的优先级高于 YAML，并作用于所有目录，二者不能同时使用。
+#
+# 五、安全提醒
+# 先使用 -once -dry-run 检查 audit_log，再决定是否启用真实删除。
+# 真实删除按文件最后修改时间从旧到新进行，没有回收站和恢复功能。
+
 version: 1
 
 defaults:

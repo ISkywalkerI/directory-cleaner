@@ -1,15 +1,21 @@
 param(
     [string]$Root = (Split-Path -Parent $PSScriptRoot),
-    [string]$ServiceName = "OiSmart3D-DirectoryCleaner",
-    [string]$Nssm = "nssm.exe",
+    [string]$ServiceName = "DirectoryCleaner",
+    [string]$Nssm = "",
     [string]$Config = ""
 )
 
 $ErrorActionPreference = "Stop"
+$Root = (Resolve-Path -LiteralPath $Root).Path
 $exe = Join-Path $Root "dircleaner.exe"
 if (-not (Test-Path -LiteralPath $exe)) { throw "Missing $exe" }
 if (-not $Config) { $Config = Join-Path $Root "directory-cleaner.yaml" }
 if (-not (Test-Path -LiteralPath $Config)) { throw "Missing $Config" }
+$Config = (Resolve-Path -LiteralPath $Config).Path
+if (-not $Nssm) {
+    $Nssm = Join-Path $Root 'tools/nssm.exe'
+    if (-not (Test-Path -LiteralPath $Nssm)) { $Nssm = 'nssm.exe' }
+}
 $nssmPath = (Get-Command $Nssm -ErrorAction Stop).Source
 function Invoke-Nssm {
     & $nssmPath @args

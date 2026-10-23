@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 	"syscall"
 
@@ -13,12 +14,23 @@ import (
 	"directory-cleaner/internal/config"
 )
 
+var (
+	version   = "dev"
+	commit    = "unknown"
+	buildTime = "unknown"
+)
+
 func main() {
+	showVersion := flag.Bool("version", false, "print version and exit")
 	configPath := flag.String("config", "directory-cleaner.yaml", "YAML configuration path")
 	once := flag.Bool("once", false, "scan once and exit")
 	dryRun := flag.Bool("dry-run", false, "override all directories to dry-run")
 	execute := flag.Bool("execute", false, "override all directories to delete")
 	flag.Parse()
+	if *showVersion {
+		fmt.Printf("dircleaner %s commit=%s built=%s platform=%s/%s\n", version, commit, buildTime, runtime.GOOS, runtime.GOARCH)
+		return
+	}
 	if *dryRun && *execute {
 		fmt.Fprintln(os.Stderr, "-dry-run and -execute are mutually exclusive")
 		os.Exit(2)
