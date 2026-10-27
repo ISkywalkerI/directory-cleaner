@@ -84,7 +84,8 @@ for pair in 'old 3' 'middle 2' 'new 1'; do
 done
 chown -R "$user:$user" "$root/data" "$root/logs"
 write_config true
-sed -e "s|/opt/directory-cleaner|$root|g" \
+sed -e '/^\[Unit\]/a StartLimitIntervalSec=0' \
+    -e "s|/opt/directory-cleaner|$root|g" \
     -e "s|/etc/directory-cleaner/config.yaml|$root/config.yaml|g" \
     -e "s|/var/log/directory-cleaner|$root/logs|g" \
     -e "s|^User=.*|User=$user|" -e "s|^Group=.*|Group=$user|" \
