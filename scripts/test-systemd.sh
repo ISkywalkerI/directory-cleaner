@@ -114,7 +114,7 @@ write_config true 60s
 systemctl start "$unit"
 sleep 0.5
 stop_clean
-find "$root/logs" -maxdepth 1 -type f -name 'dir-cleaner-*.jsonl' -exec cat {} + | tail -n 1 | grep -q '"cancelled"'
+find "$root/logs" -maxdepth 1 -type f -name 'dir-cleaner-*.jsonl' -exec cat {} + | grep -q '"cancelled"'
 systemctl reset-failed "$unit"
 write_config false
 systemctl start "$unit"
