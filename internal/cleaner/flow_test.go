@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,8 +70,8 @@ func TestScanThresholdOrderAndDryRun(t *testing.T) {
 			old := fixtureFile(t, data, "old", 3*time.Hour)
 			middle := fixtureFile(t, data, "nested/middle", 2*time.Hour)
 			newest := fixtureFile(t, data, "new", time.Hour)
-			logPath := filepath.Join(root, "audit.jsonl")
-			logger, err := NewLogger(logPath)
+			logDir := filepath.Join(root, "logs")
+			logger, err := NewLogger(logDir, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -78,7 +79,11 @@ func TestScanThresholdOrderAndDryRun(t *testing.T) {
 			if err := logger.Close(); err != nil {
 				t.Fatal(err)
 			}
-			events := readEvents(t, logPath)
+			files, err := filepath.Glob(filepath.Join(logDir, "dir-cleaner-*.jsonl"))
+			if err != nil || len(files) != 1 {
+				t.Fatalf("unexpected log files: %v %v", files, err)
+			}
+			events := readEvents(t, files[0])
 			last := events[len(events)-1]
 			if last.BeforeBytes != 12 || len(last.Failures) != 0 || len(events) != tc.deletes+1 {
 				t.Fatalf("unexpected audit: %+v", events)
@@ -100,6 +105,27 @@ func TestScanThresholdOrderAndDryRun(t *testing.T) {
 			}
 			if last.AfterBytes != wantAfter || last.DeletedFiles != wantDeleted || last.DeletedBytes != int64(wantDeleted*4) {
 				t.Fatalf("wrong counts: %+v", last)
+			}
+			if tc.deletes > 0 {
+				if last.CurrentBytes == nil || *last.CurrentBytes != 12 {
+					t.Fatalf("wrong current bytes: %+v", last)
+				}
+				if last.PlannedFiles == nil || *last.PlannedFiles != tc.deletes {
+					t.Fatalf("wrong planned file count: %+v", last)
+				}
+				if last.PlannedBytes == nil || *last.PlannedBytes != int64(tc.deletes*4) {
+					t.Fatalf("wrong planned bytes: %+v", last)
+				}
+				if last.PlannedFrom == nil || last.PlannedTo == nil || last.PlannedFrom.After(*last.PlannedTo) {
+					t.Fatalf("wrong planned time range: %+v", last)
+				}
+				if tc.dry {
+					if last.DeletedFrom != nil || last.DeletedTo != nil {
+						t.Fatalf("dry run reported deleted time range: %+v", last)
+					}
+				} else if last.DeletedFrom == nil || last.DeletedTo == nil || last.DeletedFrom.After(*last.DeletedTo) {
+					t.Fatalf("wrong deleted time range: %+v", last)
+				}
 			}
 			for _, f := range []fileCandidate{old, middle, newest} {
 				_, err := os.Stat(f.Path)
@@ -143,8 +169,8 @@ func TestAgeAndCancelledScan(t *testing.T) {
 			if cancelled {
 				cancel()
 			}
-			p := filepath.Join(root, "audit.jsonl")
-			l, err := NewLogger(p)
+			p := filepath.Join(root, "logs")
+			l, err := NewLogger(p, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -152,7 +178,11 @@ func TestAgeAndCancelledScan(t *testing.T) {
 			if err := l.Close(); err != nil {
 				t.Fatal(err)
 			}
-			e := readEvents(t, p)
+			files, err := filepath.Glob(filepath.Join(p, "dir-cleaner-*.jsonl"))
+			if err != nil || len(files) != 1 {
+				t.Fatalf("unexpected log files: %v %v", files, err)
+			}
+			e := readEvents(t, files[0])
 			if len(e) != 1 || len(e[0].Failures) == 0 || e[0].DeletedFiles != 0 {
 				t.Fatal(e)
 			}
@@ -215,6 +245,28 @@ func TestStableObservation(t *testing.T) {
 	}
 }
 
+func TestCheckStabilityWaitsOncePerBatch(t *testing.T) {
+	root := t.TempDir()
+	candidates := make([]fileCandidate, 0, 8)
+	for i := 0; i < 8; i++ {
+		candidates = append(candidates, fixtureFile(t, root, filepath.Join("data", fmt.Sprintf("file-%d", i)), time.Hour))
+	}
+	start := time.Now()
+	results := checkStability(context.Background(), candidates, config.ResolvedDirectory{
+		StableFor:  100 * time.Millisecond,
+		MinAge:     0,
+		MaxWorkers: 1,
+	})
+	if elapsed := time.Since(start); elapsed >= 600*time.Millisecond {
+		t.Fatalf("stability check waited per file: %s", elapsed)
+	}
+	for index, result := range results {
+		if !result.ready || result.reason != "" {
+			t.Fatalf("candidate %d was not stable: %+v", index, result)
+		}
+	}
+}
+
 func TestSymlinkDirectoryAndRemove(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
@@ -240,9 +292,9 @@ func TestSymlinkDirectoryAndRemove(t *testing.T) {
 }
 
 func TestLoggerConcurrentAppend(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "nested", "audit.jsonl")
+	p := filepath.Join(t.TempDir(), "nested")
 	for pass := 0; pass < 2; pass++ {
-		l, err := NewLogger(p)
+		l, err := NewLogger(p, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -261,10 +313,62 @@ func TestLoggerConcurrentAppend(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if events := readEvents(t, p); len(events) != 40 {
-		t.Fatalf("lost events: %d", len(events))
+	files, err := filepath.Glob(filepath.Join(p, "dir-cleaner-*.jsonl"))
+	if err != nil || len(files) != 2 {
+		t.Fatalf("unexpected log files: %v %v", files, err)
 	}
-	if _, err := NewLogger(filepath.Dir(p)); err == nil {
-		t.Fatal("directory accepted as log file")
+	count := 0
+	for _, file := range files {
+		count += len(readEvents(t, file))
+	}
+	if count != 40 {
+		t.Fatalf("lost events: %d", count)
+	}
+}
+
+func TestLogNamesUseSequenceWhenTimestampCollides(t *testing.T) {
+	root := t.TempDir()
+	stamp := time.Now().Format("20060102-150405")
+	base := filepath.Join(root, "dir-cleaner-"+stamp+".jsonl")
+	if err := os.WriteFile(base, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := filepath.Base(mustNextLogPath(t, root)), "dir-cleaner-"+stamp+"-1.jsonl"; got != want {
+		t.Fatalf("first collision name = %q, want %q", got, want)
+	}
+	if err := os.WriteFile(filepath.Join(root, "dir-cleaner-"+stamp+"-1.jsonl"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := filepath.Base(mustNextLogPath(t, root)), "dir-cleaner-"+stamp+"-2.jsonl"; got != want {
+		t.Fatalf("second collision name = %q, want %q", got, want)
+	}
+}
+
+func mustNextLogPath(t *testing.T, dir string) string {
+	t.Helper()
+	path, err := nextLogPath(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestLoggerRotatesBySize(t *testing.T) {
+	root := t.TempDir()
+	l, err := NewLogger(root, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := l.Write(AuditEvent{Action: "scan", Directory: strings.Repeat("x", 60)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(root, "dir-cleaner-*.jsonl"))
+	if err != nil || len(files) < 2 {
+		t.Fatalf("rotation did not create timestamped file: %v %v", files, err)
 	}
 }

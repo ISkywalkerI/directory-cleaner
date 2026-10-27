@@ -34,25 +34,40 @@ type AuditEvent struct {
 	Action       string      `json:"action"`
 	File         *FileRecord `json:"file,omitempty"`
 	Reason       string      `json:"reason,omitempty"`
+	CurrentBytes *int64      `json:"current_bytes,omitempty"`
+	PlannedFiles *int        `json:"planned_files,omitempty"`
+	PlannedBytes *int64      `json:"planned_bytes,omitempty"`
+	PlannedFrom  *time.Time  `json:"planned_mod_time_from,omitempty"`
+	PlannedTo    *time.Time  `json:"planned_mod_time_to,omitempty"`
+	DeletedFrom  *time.Time  `json:"deleted_mod_time_from,omitempty"`
+	DeletedTo    *time.Time  `json:"deleted_mod_time_to,omitempty"`
 }
 
 type Logger struct {
-	mu      sync.Mutex
-	file    *os.File
-	writer  *bufio.Writer
-	encoder *json.Encoder
+	mu       sync.Mutex
+	file     *os.File
+	writer   *bufio.Writer
+	dir      string
+	maxBytes int64
 }
 
-func NewLogger(path string) (*Logger, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+func NewLogger(dir string, maxBytes int64) (*Logger, error) {
+	if maxBytes < 0 {
+		return nil, fmt.Errorf("audit_log_max_bytes must be non-negative")
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("create audit directory: %w", err)
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	path, err := nextLogPath(dir)
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("open audit log: %w", err)
 	}
 	writer := bufio.NewWriter(file)
-	return &Logger{file: file, writer: writer, encoder: json.NewEncoder(writer)}, nil
+	return &Logger{file: file, writer: writer, dir: dir, maxBytes: maxBytes}, nil
 }
 func (l *Logger) Close() error {
 	l.mu.Lock()
@@ -66,10 +81,62 @@ func (l *Logger) Close() error {
 func (l *Logger) Write(event AuditEvent) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if err := l.encoder.Encode(event); err != nil {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if l.maxBytes > 0 {
+		info, err := l.file.Stat()
+		if err != nil {
+			return err
+		}
+		if info.Size() > 0 && info.Size()+int64(len(data)) >= l.maxBytes {
+			if err := l.rotate(); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := l.writer.Write(data); err != nil {
 		return err
 	}
 	return l.writer.Flush()
+}
+
+func (l *Logger) rotate() error {
+	if err := l.writer.Flush(); err != nil {
+		return err
+	}
+	path, err := nextLogPath(l.dir)
+	if err != nil {
+		return err
+	}
+	if err := l.file.Close(); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	l.file = file
+	l.writer = bufio.NewWriter(file)
+	return nil
+}
+
+func nextLogPath(dir string) (string, error) {
+	stamp := time.Now().Format("20060102-150405")
+	for index := 0; ; index++ {
+		name := fmt.Sprintf("dir-cleaner-%s.jsonl", stamp)
+		if index > 0 {
+			name = fmt.Sprintf("dir-cleaner-%s-%d.jsonl", stamp, index)
+		}
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return path, nil
+		} else if err != nil {
+			return "", fmt.Errorf("check audit log path: %w", err)
+		}
+	}
 }
 
 type fileCandidate struct{ FileRecord }
@@ -106,6 +173,10 @@ func (s *Scanner) scan(ctx context.Context, dir config.ResolvedDirectory) {
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].ModTime.Before(candidates[j].ModTime) })
 	stability := checkStability(ctx, candidates, dir)
 	remaining := total
+	plannedFiles := 0
+	var plannedBytes int64
+	var plannedFrom, plannedTo *time.Time
+	var deletedFrom, deletedTo *time.Time
 	for index, candidate := range candidates {
 		if remaining <= dir.TargetBytes {
 			break
@@ -120,10 +191,30 @@ func (s *Scanner) scan(ctx context.Context, dir config.ResolvedDirectory) {
 			event.Failures = append(event.Failures, candidate.Path+": "+reason)
 			continue
 		}
+		plannedFiles++
+		plannedBytes += candidate.Size
+		if plannedFrom == nil || candidate.ModTime.Before(*plannedFrom) {
+			modTime := candidate.ModTime
+			plannedFrom = &modTime
+		}
+		if plannedTo == nil || candidate.ModTime.After(*plannedTo) {
+			modTime := candidate.ModTime
+			plannedTo = &modTime
+		}
 		deleted, err := remove(candidate.Path, candidate.Size, candidate.ModTime, dir.DryRun)
 		if err != nil {
 			event.Failures = append(event.Failures, candidate.Path+": "+err.Error())
 			continue
+		}
+		if !dir.DryRun {
+			if deletedFrom == nil || candidate.ModTime.Before(*deletedFrom) {
+				modTime := candidate.ModTime
+				deletedFrom = &modTime
+			}
+			if deletedTo == nil || candidate.ModTime.After(*deletedTo) {
+				modTime := candidate.ModTime
+				deletedTo = &modTime
+			}
 		}
 		fileEvent := event
 		fileEvent.Action = "delete"
@@ -142,12 +233,21 @@ func (s *Scanner) scan(ctx context.Context, dir config.ResolvedDirectory) {
 	if !dir.DryRun {
 		event.AfterBytes = remaining
 	}
+	event.CurrentBytes = &total
+	event.PlannedFiles = &plannedFiles
+	event.PlannedBytes = &plannedBytes
+	event.PlannedFrom = plannedFrom
+	event.PlannedTo = plannedTo
+	event.DeletedFrom = deletedFrom
+	event.DeletedTo = deletedTo
 	event.Action = "summary"
 	_ = s.logger.Write(event)
 }
 
 func checkStability(ctx context.Context, candidates []fileCandidate, dir config.ResolvedDirectory) []stabilityResult {
 	results := make([]stabilityResult, len(candidates))
+	eligible := make([]int, 0, len(candidates))
+	var eligibleMu sync.Mutex
 	jobs := make(chan int)
 	var wg sync.WaitGroup
 	workers := dir.MaxWorkers
@@ -168,8 +268,13 @@ func checkStability(ctx context.Context, candidates []fileCandidate, dir config.
 					results[index] = stabilityResult{reason: "too_young"}
 					continue
 				}
-				ready, reason := stable(ctx, candidate.Path, candidate.Size, candidate.ModTime, dir.StableFor)
-				results[index] = stabilityResult{ready: ready, reason: reason}
+				if err := checkPlatformAccess(candidate.Path); err != nil {
+					results[index] = stabilityResult{reason: "locked_or_inaccessible: " + err.Error()}
+					continue
+				}
+				eligibleMu.Lock()
+				eligible = append(eligible, index)
+				eligibleMu.Unlock()
 			}
 		}()
 	}
@@ -178,6 +283,58 @@ func checkStability(ctx context.Context, candidates []fileCandidate, dir config.
 		case jobs <- index:
 		case <-ctx.Done():
 			results[index] = stabilityResult{reason: "cancelled"}
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	if ctx.Err() != nil || len(eligible) == 0 {
+		return results
+	}
+	if dir.StableFor > 0 {
+		timer := time.NewTimer(dir.StableFor)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			for _, index := range eligible {
+				results[index] = stabilityResult{reason: "cancelled"}
+			}
+			return results
+		}
+	}
+
+	jobs = make(chan int)
+	wg = sync.WaitGroup{}
+	workers = dir.MaxWorkers
+	if workers > len(eligible) {
+		workers = len(eligible)
+	}
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				if ctx.Err() != nil {
+					results[index] = stabilityResult{reason: "cancelled"}
+					continue
+				}
+				candidate := candidates[index]
+				ready, reason := verifyStable(ctx, candidate.Path, candidate.Size, candidate.ModTime)
+				results[index] = stabilityResult{ready: ready, reason: reason}
+			}
+		}()
+	}
+dispatch:
+	for position, index := range eligible {
+		select {
+		case jobs <- index:
+		case <-ctx.Done():
+			for _, pending := range eligible[position:] {
+				results[pending] = stabilityResult{reason: "cancelled"}
+			}
+			break dispatch
 		}
 	}
 	close(jobs)
@@ -230,6 +387,13 @@ func stable(ctx context.Context, path string, expectedSize int64, expectedMod ti
 		case <-ctx.Done():
 			return false, "cancelled"
 		}
+	}
+	return verifyStable(ctx, path, expectedSize, expectedMod)
+}
+
+func verifyStable(ctx context.Context, path string, expectedSize int64, expectedMod time.Time) (bool, string) {
+	if ctx.Err() != nil {
+		return false, "cancelled"
 	}
 	info, err := os.Lstat(path)
 	if err != nil {

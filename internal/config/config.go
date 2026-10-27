@@ -40,12 +40,13 @@ type Config struct {
 }
 
 type Defaults struct {
-	ScanInterval string `yaml:"scan_interval"`
-	StableFor    string `yaml:"stable_for"`
-	MinAge       string `yaml:"min_age"`
-	MaxWorkers   int    `yaml:"max_workers"`
-	DryRun       *bool  `yaml:"dry_run"`
-	AuditLog     string `yaml:"audit_log"`
+	ScanInterval     string    `yaml:"scan_interval"`
+	StableFor        string    `yaml:"stable_for"`
+	MinAge           string    `yaml:"min_age"`
+	MaxWorkers       int       `yaml:"max_workers"`
+	DryRun           *bool     `yaml:"dry_run"`
+	AuditLogDir      string    `yaml:"audit_log_dir"`
+	AuditLogMaxBytes *ByteSize `yaml:"audit_log_max_bytes"`
 }
 
 type Directory struct {
@@ -73,8 +74,9 @@ type ResolvedDirectory struct {
 }
 
 type ResolvedConfig struct {
-	Directories []ResolvedDirectory
-	AuditLog    string
+	Directories      []ResolvedDirectory
+	AuditLogDir      string
+	AuditLogMaxBytes int64
 }
 
 func Load(path string) (ResolvedConfig, error) {
@@ -106,8 +108,12 @@ func Load(path string) (ResolvedConfig, error) {
 	if defaults.MaxWorkers == 0 {
 		defaults.MaxWorkers = 1
 	}
-	if defaults.AuditLog == "" {
-		defaults.AuditLog = "logs/directory-cleaner.jsonl"
+	if defaults.AuditLogDir == "" {
+		defaults.AuditLogDir = "logs"
+	}
+	auditLogMaxBytes := int64(10 * 1024 * 1024)
+	if defaults.AuditLogMaxBytes != nil {
+		auditLogMaxBytes = int64(*defaults.AuditLogMaxBytes)
 	}
 	defaultDryRun := true
 	if defaults.DryRun != nil {
@@ -129,11 +135,7 @@ func Load(path string) (ResolvedConfig, error) {
 		return ResolvedConfig{}, fmt.Errorf("defaults.max_workers must be at least 1")
 	}
 
-	resolved := ResolvedConfig{AuditLog: defaults.AuditLog}
-	auditPath, err := filepath.Abs(resolved.AuditLog)
-	if err != nil {
-		return ResolvedConfig{}, fmt.Errorf("resolve audit_log: %w", err)
-	}
+	resolved := ResolvedConfig{AuditLogDir: filepath.Clean(defaults.AuditLogDir), AuditLogMaxBytes: auditLogMaxBytes}
 	seen := make(map[string]bool)
 	for i, item := range raw.Directories {
 		if item.Name == "" {
@@ -145,14 +147,6 @@ func Load(path string) (ResolvedConfig, error) {
 		seen[item.Name] = true
 		if item.Path == "" {
 			return ResolvedConfig{}, fmt.Errorf("%s.path is required", item.Name)
-		}
-		rootPath, err := filepath.Abs(item.Path)
-		if err != nil {
-			return ResolvedConfig{}, fmt.Errorf("resolve %s.path: %w", item.Name, err)
-		}
-		rel, err := filepath.Rel(rootPath, auditPath)
-		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return ResolvedConfig{}, fmt.Errorf("audit_log must be outside cleanup directory %s", item.Name)
 		}
 		if item.TriggerBytes <= 0 || item.TargetBytes < 0 || item.TargetBytes >= item.TriggerBytes {
 			return ResolvedConfig{}, fmt.Errorf("%s requires trigger_bytes > target_bytes >= 0", item.Name)

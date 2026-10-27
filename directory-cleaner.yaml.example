@@ -9,7 +9,7 @@
 # scan_interval：连续运行时的扫描周期。程序启动后会立即扫描一次。
 #   使用 Go duration 格式：30s=30 秒，5m=5 分钟，1h=1 小时，也支持 ms 等单位。
 #   必须大于 0。
-# stable_for：稳定性观察时间。等待后再次比较文件大小和修改时间。
+# stable_for：一轮目录稳定性观察时间。先记录候选文件，统一等待后再批量比较大小和修改时间。
 #   0s 表示不等待，但仍会执行访问检查和删除前复核；不能为负数。
 # min_age：文件最小年龄。文件最后修改时间距现在至少达到该时长，才会进入清理检查。
 #   例如 10m 表示至少 10 分钟未修改；可以填写 0s，但不能为负数。
@@ -17,8 +17,10 @@
 #   它只控制检查并发数，不表示并发删除数量。
 # dry_run：是否预演。true 表示只记录计划删除的文件，不真正删除；默认应保持 true。
 #   确认审计日志和路径无误后，可以改为 false，或使用命令行 -execute。
-# audit_log：JSONL 审计日志路径，必须位于所有清理目录之外。
+# audit_log_dir：JSONL 审计日志目录。程序启动和轮转时直接创建时间命名文件。
 #   相对路径相对于程序启动时的工作目录，而不是相对于本 YAML 文件。
+# audit_log_max_bytes：单个日志文件大小上限，默认 10MB；填写 0 表示不轮转。
+#   历史日志由 logs 目录自己的普通清理规则删除；当前正在写入的日志不会被删除。
 #
 # 三、directories 中每个目录的参数
 # name：目录在审计日志中的名称，不能重复；省略时自动生成 directory-1、directory-2……。
@@ -36,7 +38,7 @@
 # 命令行 -dry-run 和 -execute 的优先级高于 YAML，并作用于所有目录，二者不能同时使用。
 #
 # 五、安全提醒
-# 先使用 -once -dry-run 检查 audit_log，再决定是否启用真实删除。
+# 先使用 -once -dry-run 检查 audit_log_dir，再决定是否启用真实删除。
 # 真实删除按文件最后修改时间从旧到新进行，没有回收站和恢复功能。
 
 version: 1
@@ -47,15 +49,17 @@ defaults:
   min_age: 10m
   max_workers: 1
   dry_run: true
-  audit_log: logs/directory-cleaner.jsonl
+  audit_log_dir: logs
+  audit_log_max_bytes: 10MB
 
 directories:
+  # 程序自身的审计日志目录。只放日志文件，由本程序负责清理历史日志。
+  - name: logs
+    path: logs
+    trigger_bytes: 100MB
+    target_bytes: 50MB
+
   - name: rundata
     path: C:/3Dshape/app/rundata
-    trigger_bytes: 100GB
-    target_bytes: 80GB
-
-  - name: csvdata
-    path: C:/3Dshape/app/csvdata
     trigger_bytes: 100GB
     target_bytes: 80GB

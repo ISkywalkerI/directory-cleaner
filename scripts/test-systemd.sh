@@ -37,8 +37,9 @@ wait_for() {
         sleep 0.1
     done
 }
-audit_count() { wc -l <"$root/logs/audit.jsonl" 2>/dev/null || echo 0; }
-has_scans() { [[ -f $root/logs/audit.jsonl ]] && (( $(audit_count) >= 6 )); }
+audit_files() { find "$root/logs" -maxdepth 1 -type f -name 'dir-cleaner-*.jsonl' -print | sort; }
+audit_count() { find "$root/logs" -maxdepth 1 -type f -name 'dir-cleaner-*.jsonl' -exec cat {} + 2>/dev/null | wc -l; }
+has_scans() { [[ -n $(audit_files) ]] && (( $(audit_count) >= 6 )); }
 main_pid() { systemctl show "$unit" --property=MainPID --value; }
 resumed() { [[ $(main_pid) != 0 && $(main_pid) != "$1" ]] && (( $(audit_count) > "$2" )); }
 write_config() {
@@ -49,7 +50,7 @@ defaults:
   stable_for: ${2:-0s}
   min_age: 0s
   dry_run: $1
-  audit_log: $root/logs/audit.jsonl
+  audit_log_dir: $root/logs
 directories:
 - path: $root/data
   trigger_bytes: 10
@@ -66,9 +67,9 @@ stop_clean() {
     [[ $(systemctl show "$unit" --property=Result --value) == success ]]
     [[ $(systemctl show "$unit" --property=ActiveState --value) == inactive ]]
     ! kill -0 "$pid" 2>/dev/null
-    length=$(stat -c %s "$root/logs/audit.jsonl")
+    length=$(find "$root/logs" -maxdepth 1 -type f -name 'dir-cleaner-*.jsonl' -printf '%s\n' 2>/dev/null | awk '{sum += $1} END {print sum + 0}')
     sleep 0.5
-    [[ $(stat -c %s "$root/logs/audit.jsonl") == "$length" ]]
+    [[ $(find "$root/logs" -maxdepth 1 -type f -name 'dir-cleaner-*.jsonl' -printf '%s\n' 2>/dev/null | awk '{sum += $1} END {print sum + 0}') == "$length" ]]
 }
 useradd --system --user-group --no-create-home --shell /usr/sbin/nologin "$user"
 user_created=true
@@ -112,10 +113,10 @@ write_config true 60s
 systemctl start "$unit"
 sleep 0.5
 stop_clean
-tail -n 1 "$root/logs/audit.jsonl" | grep -q '"cancelled"'
+find "$root/logs" -maxdepth 1 -type f -name 'dir-cleaner-*.jsonl' -exec cat {} + | tail -n 1 | grep -q '"cancelled"'
 write_config false
 systemctl start "$unit"
-deleted() { grep -q '"deleted_bytes":8,"deleted_files":2' "$root/logs/audit.jsonl"; }
+deleted() { find "$root/logs" -maxdepth 1 -type f -name 'dir-cleaner-*.jsonl' -exec cat {} + | grep -q '"deleted_bytes":8,"deleted_files":2'; }
 wait_for deleted
 stop_clean
 [[ $(find "$root/data" -type f | wc -l) == 1 && $(cat "$root/data/new") == 1234 ]]

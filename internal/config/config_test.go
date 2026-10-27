@@ -38,7 +38,7 @@ func TestLoadDefaultsAndOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := cfg.Directories[0]
-	if d.Name != "directory-1" || !d.DryRun || d.ScanInterval != 5*time.Minute || d.StableFor != 2*time.Minute || d.MinAge != 10*time.Minute || d.MaxWorkers != 1 || cfg.AuditLog != "logs/directory-cleaner.jsonl" {
+	if d.Name != "directory-1" || !d.DryRun || d.ScanInterval != 5*time.Minute || d.StableFor != 2*time.Minute || d.MinAge != 10*time.Minute || d.MaxWorkers != 1 || cfg.AuditLogDir != "logs" || cfg.AuditLogMaxBytes != 10*1024*1024 {
 		t.Fatalf("unexpected defaults: %+v %+v", cfg, d)
 	}
 	cfg, err = loadText(t, `version: 1
@@ -48,7 +48,7 @@ defaults:
   min_age: 3s
   max_workers: 2
   dry_run: false
-  audit_log: outside.jsonl
+  audit_log_dir: outside
 directories:
 - name: first
   path: data/../first
@@ -68,11 +68,15 @@ directories:
 		t.Fatal(err)
 	}
 	a, b := cfg.Directories[0], cfg.Directories[1]
-	if a.Path != "first" || a.DryRun || a.ScanInterval != 2*time.Second || a.StableFor != time.Second || a.MinAge != 3*time.Second || a.MaxWorkers != 2 || a.TriggerBytes != 2048 || cfg.AuditLog != "outside.jsonl" {
+	if a.Path != "first" || a.DryRun || a.ScanInterval != 2*time.Second || a.StableFor != time.Second || a.MinAge != 3*time.Second || a.MaxWorkers != 2 || a.TriggerBytes != 2048 || cfg.AuditLogDir != "outside" {
 		t.Fatalf("defaults not inherited: %+v", a)
 	}
 	if !b.DryRun || b.ScanInterval != 4*time.Second || b.StableFor != 0 || b.MinAge != 0 || b.MaxWorkers != 3 {
 		t.Fatalf("overrides lost: %+v", b)
+	}
+	cfg, err = loadText(t, "version: 1\ndefaults:\n  audit_log_max_bytes: 0\ndirectories:\n- path: data\n  trigger_bytes: 10\n  target_bytes: 5\n")
+	if err != nil || cfg.AuditLogMaxBytes != 0 {
+		t.Fatalf("explicit zero must disable rotation: %+v %v", cfg, err)
 	}
 }
 
@@ -97,6 +101,7 @@ func TestLoadRejectsInvalidConfig(t *testing.T) {
 	}
 	cases["zero interval"] = validDirectory + "  scan_interval: 0s\n"
 	cases["invalid duration"] = validDirectory + "  stable_for: invalid\n"
+	cases["negative audit log size"] = validDirectory + "\ndefaults:\n  audit_log_max_bytes: -1\n"
 	for name, input := range cases {
 		t.Run(name, func(t *testing.T) {
 			if _, err := loadText(t, input); err == nil {
@@ -128,12 +133,21 @@ func TestByteSize(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsAuditInCleanupDirectory(t *testing.T) {
+func TestLoadAuditLogDir(t *testing.T) {
 	root := t.TempDir()
-	for _, audit := range []string{root, filepath.Join(root, "audit.jsonl"), filepath.Join(root, "nested", "audit.jsonl")} {
-		text := "version: 1\ndefaults:\n  audit_log: '" + filepath.ToSlash(audit) + "'\ndirectories:\n- path: '" + filepath.ToSlash(root) + "'\n  trigger_bytes: 10\n  target_bytes: 0\n"
-		if _, err := loadText(t, text); err == nil || !strings.Contains(err.Error(), "outside cleanup directory") {
-			t.Fatalf("unsafe audit path accepted: %s: %v", audit, err)
-		}
+	audit := filepath.Join(root, "logs")
+	text := "version: 1\ndefaults:\n  audit_log_dir: '" + filepath.ToSlash(audit) + "'\ndirectories:\n- path: '" + filepath.ToSlash(root) + "'\n  trigger_bytes: 10\n  target_bytes: 0\n"
+	cfg, err := loadText(t, text)
+	if err != nil {
+		t.Fatalf("audit log inside cleanup directory rejected: %v", err)
+	}
+	if filepath.Clean(cfg.AuditLogDir) != filepath.Clean(audit) || len(cfg.Directories) != 1 {
+		t.Fatalf("unexpected resolved config: %+v", cfg)
+	}
+}
+
+func TestLoadRejectsLegacyAuditLog(t *testing.T) {
+	if cfg, err := loadText(t, "version: 1\ndefaults:\n  audit_log: old.jsonl\ndirectories:\n- path: data\n  trigger_bytes: 10\n  target_bytes: 5\n"); err != nil || cfg.AuditLogDir != "logs" {
+		t.Fatalf("legacy audit_log should be ignored in favor of default directory: %+v %v", cfg, err)
 	}
 }

@@ -53,4 +53,4 @@ Use concise, imperative subjects such as `Fix stability check before deletion`. 
 
 ## Configuration & Deletion Safety
 
-Keep `dry_run: true` as the default. Review audit output before enabling deletion; `-execute` overrides dry-run for every configured directory. Preserve symlink exclusion, age and stability checks, and validation requiring `trigger_bytes > target_bytes >= 0`. Keep audit logs outside cleanup directories.
+Keep `dry_run: true` as the default. Review audit output before enabling deletion; `-execute` overrides dry-run for every configured directory. Preserve symlink exclusion, age and stability checks, and validation requiring `trigger_bytes > target_bytes >= 0`. Audit logs are ordinary files in the configured log directory and are cleaned by the same age and stability rules.
