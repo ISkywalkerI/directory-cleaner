@@ -127,18 +127,18 @@ try {
             Assert ($LASTEXITCODE -eq 0 -and $output -eq "dircleaner $releaseVersion commit=$($metadata.commit) built=$($metadata.build_time) platform=$os/$arch") 'Version command failed'
             New-Item -ItemType Directory -Path "$root/data", "$root/logs" | Out-Null
             [IO.File]::WriteAllText("$root/data/keep.txt", 'keep')
-            $config = "version: 1`ndefaults:`n  dry_run: true`n  stable_for: 0s`n  min_age: 0s`n  audit_log: logs/audit.jsonl`ndirectories:`n- path: data`n  trigger_bytes: 3`n  target_bytes: 0`n"
+            $config = "version: 1`ndefaults:`n  dry_run: true`n  stable_for: 0s`n  min_age: 0s`n  audit_log_dir: logs`ndirectories:`n- path: data`n  trigger_bytes: 3`n  target_bytes: 0`n"
             [IO.File]::WriteAllText("$root/directory-cleaner.yaml", $config)
-            [IO.File]::WriteAllText("$root/logs/audit.jsonl", "{`"sentinel`":true}`n")
+            [IO.File]::WriteAllText("$root/logs/dir-cleaner-20200101-000000.jsonl", "{`"sentinel`":true}`n")
             Expand-Checked $archive $extracted $expected
             Assert ([IO.File]::ReadAllText("$root/directory-cleaner.yaml") -ceq $config) 'Upgrade changed existing config'
-            Assert ([IO.File]::ReadAllText("$root/logs/audit.jsonl") -ceq "{`"sentinel`":true}`n") 'Upgrade changed existing audit data'
+            Assert ([IO.File]::ReadAllText("$root/logs/dir-cleaner-20200101-000000.jsonl") -ceq "{`"sentinel`":true}`n") 'Upgrade changed existing audit data'
             if ($os -eq 'windows') { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$root/start.ps1" -once -dry-run } else { & bash "$root/start.sh" -once -dry-run }
             Assert ($LASTEXITCODE -eq 0) 'Packaged launcher failed'
             Assert ([IO.File]::ReadAllText("$root/data/keep.txt") -ceq 'keep') 'Preview changed data'
-            $events = @(Get-Content -LiteralPath "$root/logs/audit.jsonl" | ConvertFrom-Json)
+            $events = @(Get-ChildItem -LiteralPath "$root/logs" -Filter 'dir-cleaner-*.jsonl' | ForEach-Object { Get-Content -LiteralPath $_.FullName } | Where-Object { $_ } | ConvertFrom-Json)
             Assert ($events.Count -eq 3 -and $events[-1].action -eq 'summary' -and $events[-1].dry_run -eq $true) 'Preview audit missing; check launcher working directory and arguments'
-            Assert ((Get-Content -LiteralPath "$root/logs/audit.jsonl" -First 1) -ceq '{"sentinel":true}') 'Audit was truncated'
+            Assert ((Get-Content -LiteralPath "$root/logs/dir-cleaner-20200101-000000.jsonl" -First 1) -ceq '{"sentinel":true}') 'Audit was truncated'
             Write-Host "PASS native package: $target (version, launcher, preview, upgrade preservation)"
         } else { Write-Host "PASS structure only: $target (not runtime validation)" }
     }

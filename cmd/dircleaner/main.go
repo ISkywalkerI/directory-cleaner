@@ -45,7 +45,7 @@ func main() {
 			cfg.Directories[i].DryRun = *dryRun
 		}
 	}
-	logger, err := cleaner.NewLogger(cfg.AuditLog)
+	logger, err := cleaner.NewLogger(cfg.AuditLogDir, cfg.AuditLogMaxBytes)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

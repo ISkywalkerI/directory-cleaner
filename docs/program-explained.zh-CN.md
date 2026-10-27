@@ -35,7 +35,7 @@
 | 快照 | 在某次扫描时记录下来的状态 | 当时文件大小为 4 字节 |
 | goroutine | Go 里可并发运行的一段任务 | 两个目录各有一个扫描任务 |
 | channel | goroutine 之间传递任务的通道 | 把文件下标发给检查 worker |
-| worker | 从任务通道取工作并处理的执行者 | 等待并复核一个文件是否稳定 |
+| worker | 从任务通道取工作并处理的执行者 | 批量观察前检查或观察后复核文件 |
 | context | 用来传播“应当停止了”的取消通知 | Ctrl+C 后通知所有扫描任务 |
 | Mutex | 互斥锁，让共享操作排队执行 | 防止同一进程的日志写入互相穿插 |
 | WaitGroup | 等待一组并发任务全部结束 | 等待所有目录扫描任务退出 |
@@ -61,7 +61,7 @@ flowchart TD
     Check --> Platform["平台访问接口<br/>Windows 独占打开 / Unix 普通打开"]
     Remove --> Platform
     Scanner --> Logger["Logger<br/>JSON 编码、互斥、追加与 Flush"]
-    Logger --> Audit["清理目录外的 JSONL 审计文件"]
+    Logger --> Audit["JSONL 审计日志目录；活动文件从清理扫描中排除"]
     Collect --> FS["操作系统文件系统"]
     Remove --> FS
 ```
@@ -81,7 +81,7 @@ flowchart TD
 | [deploy/README.md](../deploy/README.md) | 发布包使用、服务安装、升级与回退 | 与目标平台对应的部分 |
 | [docs/testing.md](testing.md) | 自动化检查与目标机器验收 | 能力跳过项和服务验收要求 |
 
-项目没有图形界面、数据库或 HTTP 服务。运行时主要和配置文件、业务文件、审计文件及操作系统交互。`go.mod` 声明的直接第三方依赖是 YAML 解析库 `gopkg.in/yaml.v3 v3.0.1`，其余核心逻辑使用 Go 标准库。
+项目没有图形界面、数据库或 HTTP 服务。运行时主要和配置文件、业务文件、审计日志目录及操作系统交互。`go.mod` 声明的直接第三方依赖是 YAML 解析库 `gopkg.in/yaml.v3 v3.0.1`，其余核心逻辑使用 Go 标准库。
 
 ## 4. 先把配置看懂
 
@@ -98,7 +98,7 @@ defaults:
   min_age: 10m
   max_workers: 1
   dry_run: true
-  audit_log: logs/directory-cleaner.jsonl
+  audit_log_dir: logs
 
 directories:
   - name: scan-data
@@ -130,7 +130,8 @@ directories:
 | `min_age` | 距离文件最后修改至少多久才可继续检查 | `10m`；允许 `0s` |
 | `max_workers` | 每个目录并发执行稳定性检查的数量 | `1`；目录项为 0 时继承默认值 |
 | `dry_run` | 是否只预演 | `true` |
-| `audit_log` | 所有目录共用的审计文件 | 只在 `defaults` 中配置；默认 `logs/directory-cleaner.jsonl` |
+| `audit_log_dir` | 所有目录共用的审计日志目录 | 只在 `defaults` 中配置；默认 `logs`。每次启动和轮转时直接创建时间戳文件 |
+| `audit_log_max_bytes` | 活动审计日志的轮转阈值 | 只在 `defaults` 中配置；默认 `10MB`，`0` 表示关闭轮转 |
 
 注意容量后缀采用二进制倍数：`1KB = 1024` 字节，`1MB = 1024²` 字节，`1GB = 1024³` 字节。支持不带后缀的数字、大小写及小数，例如 `1.5 mb`；转换到整数时舍去不足 1 字节的部分。解析器拒绝负数、非法数字、非有限值以及超出 `int64` 上界的数值。当前没有实现 `GiB` 等额外后缀。
 
@@ -143,7 +144,7 @@ flowchart TD
     Read["os.ReadFile 读取 YAML"] --> Parse["yaml.Unmarshal<br/>得到 Config / Directory"]
     Parse --> Defaults["填入内置默认值<br/>解析默认时长和预演开关"]
     Defaults --> Each["逐个目录处理"]
-    Each --> Validate["校验名称、路径、阈值、时长、worker<br/>检查审计路径位于清理路径外"]
+    Each --> Validate["校验名称、路径、阈值、时长和 worker"]
     Validate --> Override["应用目录自己的覆盖设置"]
     Override --> Resolved["ResolvedDirectory<br/>明确的 bool、int64、time.Duration"]
     Resolved --> Flags["main 应用命令行全局覆盖"]
@@ -167,7 +168,7 @@ flowchart TD
 
 第一，直接启动二进制时，相对路径根据**进程的当前工作目录**解释，不根据 YAML 文件所在目录解释。`-config X:/settings/config.yaml` 不会自动把业务路径切换到 `X:/settings`。发布包启动脚本先切换到包目录，因此包内启动的相对路径有固定起点；服务也设置了工作目录。
 
-第二，加载配置会检查审计日志不能位于任何清理路径内部，但这是通过绝对化和路径相对关系进行的路径检查；并没有解析所有符号链接来证明磁盘上的物理位置。普通部署应使用明确的、不重叠的业务路径和日志路径。当前还没有拒绝不同配置条目使用相同或父子重叠路径。
+第二，审计日志目录可以位于清理路径内部。程序每次启动和轮转时直接创建新的时间戳文件；日志目录中的文件作为普通文件参与清理，按修改时间从旧到新处理。若需要长期保留日志，应将日志放到不会触发清理的目录。当前还没有拒绝不同配置条目使用相同或父子重叠路径。
 
 当前 YAML 解析调用没有开启未知字段拒绝模式，所以拼错一个配置键不一定立刻报错；实际生效值仍取决于上述解析与默认规则。
 
@@ -225,7 +226,7 @@ flowchart TD
     Collect --> Trigger{"total 大于 trigger_bytes？"}
     Trigger -->|否| ScanLog["写一条 scan 审计<br/>本轮结束"]
     Trigger -->|是| Sort["按修改时间从旧到新排序"]
-    Sort --> Stable["checkStability<br/>对全部候选完成年龄和稳定性检查"]
+    Sort --> Stable["checkStability<br/>初检候选、统一等待、批量复核"]
     Stable --> Init["remaining = total"]
     Init --> Next{"还有候选且 remaining 大于 target？"}
     Next -->|否| Summary["写 summary<br/>本轮结束"]
@@ -251,7 +252,9 @@ flowchart TD
     写 scan，结束
 
 按修改时间排序
-为全部候选完成稳定性检查
+初检全部候选并记录可观察文件
+统一等待 stable_for
+批量复核可观察文件
 剩余估算量 = 总量
 
 按排序后的顺序逐个处理：
@@ -267,7 +270,7 @@ flowchart TD
 写 summary
 ```
 
-一个关键实现顺序是：**先完成全部候选的稳定性检查，再开始有序处理文件**。即使最终只需要删两个文件，当前实现也会先检查其他候选。理解这一点，才能理解 `stable_for` 和 `max_workers` 对耗时的影响。
+一个关键实现顺序是：**先完成全部候选的稳定性检查，再开始有序处理文件**。即使最终只需要删两个文件，当前实现也会先检查其他候选。稳定性检查分为初检、一次统一等待和批量复核，等待时间不再按文件数量重复累加。
 
 ## 7. collect：容量到底是怎样算出来的
 
@@ -354,8 +357,8 @@ sort.Slice(candidates, func(i, j int) bool {
 flowchart TD
     Sorted["已按修改时间排序的 candidates"] --> Dispatcher["分发文件下标 0、1、2……"]
     Dispatcher --> Channel["jobs channel"]
-    Channel --> W1["worker 1<br/>检查年龄，再调用 stable"]
-    Channel --> W2["worker 2<br/>检查年龄，再调用 stable"]
+    Channel --> W1["worker 1<br/>初检或复核一个文件"]
+    Channel --> W2["worker 2<br/>初检或复核一个文件"]
     Channel --> WN["其余 worker<br/>数量受 max_workers 限制"]
     W1 --> Results["按原下标写 results<br/>ready / reason"]
     W2 --> Results
@@ -366,7 +369,7 @@ flowchart TD
 
 任务通道里传的是下标，而不是另一份完整文件数据。worker 拿到下标后读取对应候选，并把检查结果写回 `results[index]`。不同 worker 处理不同下标，主流程在 `wg.Wait()` 返回后才读取这些结果。
 
-这解决了一个问题：有些文件检查快，有些文件等待久，完成顺序可能不同；但结果仍与原候选一一对应，后续删除仍按修改时间顺序进行。检查先结束的较新文件不会因此插队先删。
+worker 先并发完成年龄和访问初检；程序随后为整轮候选统一等待一次 `stable_for`，再并发完成属性复核。结果仍与原候选一一对应，后续删除仍按修改时间顺序进行。检查先结束的较新文件不会因此插队先删。
 
 `max_workers` 的作用范围是**一个目录的一轮稳定性检查**。实际 worker 数是配置值与候选数量两者中的较小值。
 
@@ -382,15 +385,15 @@ flowchart TD
 
 ### 10.2 为什么稳定检查可能很慢
 
-假设有 K 个文件都满足年龄并能进入观察，每个等待 S，worker 数为 W，忽略文件系统开销时，这个阶段大约需要：
+假设有 K 个文件都满足年龄并能进入观察，统一等待 S，worker 数为 W，忽略文件系统开销时，这个阶段大约需要：
 
 ```text
-ceil(K / W) × S
+S + ceil(K / W) × R
 ```
 
-`ceil` 表示向上取整。100 个文件、每个观察 `2m`、1 个 worker，大约等待 200 分钟；4 个 worker，大约 50 分钟。年龄不足或访问失败的文件可以较快返回，实际时间会受文件数量、错误、取消和系统开销影响。
+`ceil` 表示向上取整，`R` 是批量复核文件属性和访问权限的时间。100 个文件、统一观察 `2m` 时，不论是 1 个还是 4 个 worker，都只等待约 2 分钟，之后再加复核开销。年龄不足或访问失败的文件可以较快返回，实际时间会受文件数量、错误、取消和系统开销影响。
 
-这是根据代码顺序计算的教学估计，不是本次做过的性能基准。当前实现会检查全部候选，即使只需要删少量文件；把扫描间隔设成 5 分钟，也不能强迫一个耗时 50 分钟的扫描在 5 分钟内结束。
+这是根据代码顺序计算的教学估计，不是本次做过的性能基准。当前实现仍会检查全部候选，即使只需要删少量文件；把扫描间隔设成 5 分钟，也不能跳过目录遍历和批量复核本身。
 
 ## 11. 一个文件怎样被判定可以删除
 
@@ -408,16 +411,16 @@ if time.Since(candidate.ModTime) < dir.MinAge {
 
 ### 11.2 第二关：stable_for 观察与复核
 
-源码：[cleaner.go:221](../internal/cleaner/cleaner.go#L221)。
+源码：[cleaner.go:259](../internal/cleaner/cleaner.go#L259)。
 
 ```mermaid
 flowchart TD
-    Start["进入 stable<br/>携带 collect 记录的大小与修改时间"] --> Access1{"第一次平台访问检查通过？"}
+    Start["初检候选<br/>年龄和第一次访问检查"] --> Access1{"第一次平台访问检查通过？"}
     Access1 -->|否| Locked1["失败：locked_or_inaccessible"]
     Access1 -->|是| Duration{"stable_for 大于 0？"}
-    Duration -->|是| Timer["启动 timer<br/>等待观察时长或取消"]
+    Duration -->|是| Timer["目录统一启动一个 timer<br/>等待观察时长或取消"]
     Timer -->|取消| Cancel["失败：cancelled"]
-    Timer -->|到时| Stat["os.Lstat 重新读取属性"]
+    Timer -->|到时| Stat["worker 批量 os.Lstat 复核"]
     Duration -->|否| Stat
     Stat -->|读取失败| StatFailed["失败：stat_failed"]
     Stat -->|成功| Link{"当前是符号链接？"}
@@ -429,7 +432,7 @@ flowchart TD
     Access2 -->|是| Ready["ready = true"]
 ```
 
-这里有三个时间点：扫描记录快照、worker 完成观察、稍后删除前再次复核。代码没有每隔一秒持续采样，也不会检测到变化后自动重新计时；发现与快照不同就让本轮跳过。
+这里有三个时间点：扫描记录快照、统一观察等待结束、稍后删除前再次复核。代码没有每隔一秒持续采样，也不会检测到变化后自动重新计时；发现与快照不同就让本轮跳过。
 
 `stable_for: 0s` 只去掉等待，不会去掉访问检查、`Lstat` 或大小与修改时间比较。稳定结果只存在本轮内存里；没有跨扫描保存“上轮已经稳定多久”的历史。
 
@@ -539,7 +542,7 @@ flowchart TD
 
 普通 JSON 文件可以包含一个很大的数组；JSONL 则把每个事件分别编码成 JSON，每行一条。读取时可以逐行处理，不需要等待整个日志形成一个完整数组。
 
-本项目没有把每个候选逐条打印到控制台。成功运行时控制台可能很安静，主要证据在 `audit_log`。
+本项目没有把每个候选逐条打印到控制台。成功运行时控制台可能很安静，主要证据在 `audit_log_dir` 的最新日志文件。
 
 `AuditEvent` 结构定义在 [cleaner.go:23](../internal/cleaner/cleaner.go#L23)。
 
@@ -558,6 +561,11 @@ flowchart TD
 | `action` | `scan`、`delete` 或 `summary` |
 | `file` | 文件事件中的路径、大小、修改时间；没有时省略 |
 | `reason` | 预演文件事件中为 `dry_run`；没有时省略 |
+| `current_bytes` | summary 中本轮扫描得到的当前普通文件总大小；没有触发清理时省略 |
+| `planned_files` | summary 中成功通过稳定性和删除前复核、并被列入本轮计划的文件数 |
+| `planned_bytes` | summary 中计划处理文件的快照字节总量 |
+| `planned_mod_time_from` / `planned_mod_time_to` | summary 中计划文件按最后修改时间的起止范围；不是扫描耗时 |
+| `deleted_mod_time_from` / `deleted_mod_time_to` | 真实模式 summary 中实际删除成功文件按最后修改时间的起止范围；预演时省略 |
 
 ### 14.2 三类事件不是每轮都有
 
@@ -575,13 +583,13 @@ flowchart TD
 ```json
 {"action":"delete","dry_run":true,"file":{"path":".../old","size":4},"reason":"dry_run"}
 {"action":"delete","dry_run":true,"file":{"path":".../middle","size":4},"reason":"dry_run"}
-{"action":"summary","dry_run":true,"before_bytes":12,"after_bytes":12,"deleted_bytes":0,"deleted_files":0,"skipped_files":0}
+{"action":"summary","dry_run":true,"before_bytes":12,"after_bytes":12,"deleted_bytes":0,"deleted_files":0,"skipped_files":0,"current_bytes":12,"planned_files":2,"planned_bytes":8,"planned_mod_time_from":"2026-01-01T00:00:00Z","planned_mod_time_to":"2026-01-02T00:00:00Z"}
 ```
 
 真实删除的 summary 教学示意则是：
 
 ```json
-{"action":"summary","dry_run":false,"before_bytes":12,"after_bytes":4,"deleted_bytes":8,"deleted_files":2,"skipped_files":0}
+{"action":"summary","dry_run":false,"before_bytes":12,"after_bytes":4,"deleted_bytes":8,"deleted_files":2,"skipped_files":0,"current_bytes":12,"planned_files":2,"planned_bytes":8,"planned_mod_time_from":"2026-01-01T00:00:00Z","planned_mod_time_to":"2026-01-02T00:00:00Z","deleted_mod_time_from":"2026-01-01T00:00:00Z","deleted_mod_time_to":"2026-01-02T00:00:00Z"}
 ```
 
 这些摘取示意不是完整 `AuditEvent`，实际输出还包含上一表中的固定字段。
@@ -607,7 +615,7 @@ flowchart TD
 
 ### 14.4 日志怎样写到硬盘
 
-`NewLogger` 先创建日志父目录，再以创建、追加、只写模式打开文件。`Write` 用互斥锁包住 JSON 编码和 `Flush`，使同一进程内的多个目录按完整记录写入同一个 logger。重启后追加，不主动清空旧记录。
+`NewLogger` 先创建日志目录，再直接创建一个带时间戳的新文件。`Write` 用互斥锁包住 JSON 编码和 `Flush`；达到大小阈值后关闭当前文件并直接创建下一个时间戳文件，同一秒追加序号。重启会创建新文件，不追加旧记录。
 
 `bufio.Writer` 是内存缓冲区，`json.Encoder.Encode` 负责编码并加换行，`Flush` 把缓冲交给底层文件写入。关闭时再 Flush 并关闭句柄。
 
@@ -813,12 +821,12 @@ for ($i = 0; $i -lt $lessonNames.Count; $i++) {
 接着在同一个 PowerShell 会话执行，沿用上一步的变量：
 
 ```powershell
-$lessonAudit = Join-Path $lessonRoot 'audit.jsonl'
+$lessonAudit = Join-Path $lessonRoot 'logs'
 $lessonConfig = Join-Path $lessonRoot 'config.yaml'
 $lessonYaml = @"
 version: 1
 defaults:
-  audit_log: '$($lessonAudit.Replace('\', '/'))'
+  audit_log_dir: '$($lessonAudit.Replace('\', '/'))'
   min_age: 10m
   stable_for: 0s
   max_workers: 2
@@ -832,7 +840,7 @@ directories:
 [IO.File]::WriteAllText($lessonConfig, $lessonYaml, [Text.UTF8Encoding]::new($false))
 ```
 
-日志是 `lessonRoot/audit.jsonl`，清理对象是其下的 `lessonRoot/data`，所以日志在清理目录外。只把教学配置中的 `stable_for` 设为 `0s` 是为了立即看到结果；生产设置需要结合实际文件写入周期选择。
+日志目录是 `lessonRoot/logs`，程序会在其中创建时间戳 JSONL 文件；清理对象是其下的 `lessonRoot/data`。只把教学配置中的 `stable_for` 设为 `0s` 是为了立即看到结果；生产设置需要结合实际文件写入周期选择。
 
 ### 19.3 运行并读结果
 
@@ -917,7 +925,7 @@ go vet ./...
 | 检查成本 | 全量收集和排序，随后对全部候选做稳定检查；候选多时耗时和内存占用会增加 |
 | 大致复杂度 | 设遍历条目数为 M、普通候选数为 N：遍历约 O(M)，排序 O(N log N)，候选及结果额外内存主要约 O(N)，另有遍历和错误记录开销 |
 | 停止行为 | 协作取消，可打断观察等待；遍历和部分系统调用不响应 context，停止耗时依赖现场 |
-| 审计可靠性 | 每条记录 Flush，但写入错误当前被上层忽略，没有 Sync、日志轮转或跨进程写锁 |
+| 审计可靠性 | 每条记录 Flush，但写入错误当前被上层忽略，没有 Sync、跨进程写锁或保留期限策略 |
 | 配置更新 | 启动读取一次；修改后重启生效 |
 | 自动恢复 | 服务管理器处理进程失败；不会自动修复 ACL、路径错误或业务侧持续写入 |
 

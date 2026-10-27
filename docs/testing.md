@@ -14,7 +14,7 @@
 | 发布包 | `pwsh -File scripts/build.ps1` 和 `pwsh -File scripts/test-release.ps1 -ReleaseDirectory <版本目录>` | 三目标架构、静态 Linux、CGO、版本、SHA256、严格文件清单、tar 执行权限通过；本机包解压后版本查询、启动预演、空格路径、任意工作目录、配置和审计保留通过 |
 | 合并门禁 | GitHub Actions `CI` | 所有矩阵作业 success；失败、取消和跳过作业均不能放行 |
 
-脚本只检查格式；需要修正时执行 `gofmt`。不设覆盖率百分比门槛，报告用于发现遗漏。测试使用独立临时目录和审计文件。`-count=1` 避免缓存掩盖本次结果，单次测试超时 3 分钟。JSONL 测试报告包含用例输出与 pass/fail/skip，覆盖率在 `artifacts/coverage.out`；CI 保留报告 14 天。
+脚本只检查格式；需要修正时执行 `gofmt`。不设覆盖率百分比门槛，报告用于发现遗漏。测试使用独立临时目录和审计日志目录。`-count=1` 避免缓存掩盖本次结果，单次测试超时 3 分钟。JSONL 测试报告包含用例输出与 pass/fail/skip，覆盖率在 `artifacts/coverage.out`；CI 保留报告 14 天。
 
 Windows CLI 子进程使用独立隐藏控制台；辅助进程附加该控制台发送真实 Ctrl+Break，避免影响测试进程和用户控制台，要求退出码 0。NSSM 服务测试通过真实服务停止路径发送 Ctrl+C，并禁用其他停止方式，避免强制终止掩盖退出问题。Ubuntu 验证 SIGINT 和 systemd 默认 SIGTERM。服务停止期间还覆盖 60 秒稳定观察被及时取消，并检查最后一条取消审计已写出。强制杀进程只用于异常恢复测试和失败清理。
 
@@ -34,7 +34,7 @@ Windows CLI 子进程使用独立隐藏控制台；辅助进程附加该控制�
 在管理员 PowerShell 使用唯一测试服务名称（例如 `DirectoryCleaner-Acceptance`），安装到专用测试根目录。该目录与任何业务目录隔离；二进制和 NSSM 必须来源明确。
 
 1. 记录 Windows 版本/架构、Go 版本、提交 SHA、NSSM 版本。复制对应二进制、配置和安装脚本。
-2. 在测试根目录建立 `data` 和 `logs`；仅在 `data` 创建三个 4 字节文件，将修改时间设为不同旧时间。配置使用绝对路径，`trigger_bytes: 10`、`target_bytes: 4`、`scan_interval: 1s`、`stable_for: 0s`、`min_age: 0s`、`dry_run: true`；审计位于 `logs/audit.jsonl`。
+2. 在测试根目录建立 `data` 和 `logs`；仅在 `data` 创建三个 4 字节文件，将修改时间设为不同旧时间。配置使用绝对路径，`trigger_bytes: 10`、`target_bytes: 4`、`scan_interval: 1s`、`stable_for: 0s`、`min_age: 0s`、`dry_run: true`；审计位于 `logs`。
 3. 执行 `deploy/install-nssm.ps1 -Root <测试根目录> -ServiceName DirectoryCleaner-Acceptance -Nssm <nssm.exe绝对路径>`。用 `Get-Service DirectoryCleaner-Acceptance` 确认 Running，检查连续多轮 JSONL 预演，三个文件均保留；检查 service.out.log/service.err.log。
 4. 用 `Stop-Service` 验证及时停止，停止后日志不再增长、没有遗留 dircleaner 子进程；`Start-Service` 和 `Restart-Service` 后扫描恢复。记录停止耗时和是否依赖强制结束。验收 NSSM 自动重启策略时，仅结束此测试服务的 dircleaner 子进程，确认新 PID 和扫描恢复。
 5. 停止测试服务，将配置改为 `dry_run: false`，启动后确认只删旧两个文件，剩余 4 字节，summary 删除 2 个/8 字节；新文件保留。
@@ -53,7 +53,7 @@ Windows CLI 子进程使用独立隐藏控制台；辅助进程附加该控制�
 6. 停止测试服务，配置改为真实删除，启动后核验剩余 4 字节和删除 2 个/8 字节；验证限制权限时错误可见，恢复权限后工作正常。
 7. `disable --now` 此测试服务，移除本次测试 unit 后 daemon-reload；保留验收记录，再清理测试用户和目录。
 
-生产 unit 的默认审计相对路径会落在 `/opt/directory-cleaner/logs`；生产部署应将 `audit_log` 明确配置为 `/var/log/directory-cleaner/audit.jsonl`，预先创建目录并授权 `directory-cleaner` 用户。自动服务测试覆盖托管 Runner 的安装和生命周期，实际生产路径、账号、ACL、开机自启和机器重启仍须目标机器补验。
+生产 unit 的默认审计相对路径会落在 `/opt/directory-cleaner/logs`；生产部署应将 `audit_log_dir` 明确配置为 `/var/log/directory-cleaner`，预先创建目录并授权 `directory-cleaner` 用户。程序会在该目录创建时间戳日志文件。自动服务测试覆盖托管 Runner 的安装和生命周期，实际生产路径、账号、ACL、开机自启和机器重启仍须目标机器补验。
 
 ## 验收记录
 

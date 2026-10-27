@@ -32,9 +32,34 @@ editor directory-cleaner.yaml
 
 Windows 的 `-ExecutionPolicy Bypass` 仅作用于当前启动进程，不修改机器策略；应先核对发布包 SHA256，现场组策略仍可能禁止运行脚本，此时可在包目录直接执行二进制。
 
+如果 PowerShell 提示“在此系统上禁止运行脚本”，可在管理员 PowerShell 中临时放行当前窗口，然后运行安装脚本：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+.\deploy\install-nssm.ps1
+```
+
+关闭该 PowerShell 窗口后，`Process` 设置自动失效。若希望当前 Windows 用户以后默认允许本地脚本运行，可设置一次 `RemoteSigned`：
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+查看所有范围及其优先级：
+
+```powershell
+Get-ExecutionPolicy -List
+```
+
+如果 `MachinePolicy` 或 `UserPolicy` 已设置，组策略优先于本地设置，需要由域或主机管理员调整。对从网络下载且带有下载标记的可信脚本，也可以只解除该文件的标记：
+
+```powershell
+Unblock-File .\deploy\install-nssm.ps1
+```
+
 启动脚本将工作目录固定为包目录，透传全部参数并保留退出码；从其他目录启动也使用包内默认配置。`-config` 和 YAML 中的相对路径相对于此工作目录。直接调用二进制时相对于调用者当前目录。
 
-默认审计文件在 `logs/directory-cleaner.jsonl`，必须位于所有清理目录之外。先查看 JSONL 中的预演结果，再按业务授权修改配置。`-execute` 会覆盖所有目录的预演设置并真实删除文件。
+默认审计日志目录在 `logs`，可以位于清理目录内。程序每次启动和轮转时直接创建时间戳日志文件；日志目录中的文件按修改时间从旧到新作为普通清理候选。先查看 JSONL 中的预演结果，再按业务授权修改配置。`-execute` 会覆盖所有目录的预演设置并真实删除文件。
 
 ## Windows NSSM 服务（可选）
 
@@ -54,7 +79,7 @@ Restart-Service DirectoryCleaner
 
 ## Ubuntu systemd 服务（可选）
 
-前台运行不需要 root。需要服务托管时，使用现有 unit 的约定：二进制在 `/opt/directory-cleaner/dircleaner`，配置在 `/etc/directory-cleaner/config.yaml`，审计使用 `/var/log/directory-cleaner/audit.jsonl`。
+前台运行不需要 root。需要服务托管时，使用现有 unit 的约定：二进制在 `/opt/directory-cleaner/dircleaner`，配置在 `/etc/directory-cleaner/config.yaml`，审计使用 `/var/log/directory-cleaner`。
 
 ```bash
 sudo useradd --system --user-group --no-create-home --shell /usr/sbin/nologin directory-cleaner
@@ -66,7 +91,7 @@ sudo test -e /etc/directory-cleaner/config.yaml || sudo cp directory-cleaner.yam
 sudoedit /etc/directory-cleaner/config.yaml
 ```
 
-将配置中的 `audit_log` 改为上述绝对日志路径，业务目录也使用绝对路径。给专用用户配置清理目录所需读写权限。根据现场路径编辑 `deploy/directory-cleaner.service`；若业务数据位于 `/usr`、`/boot` 或 `/etc` 等受 `ProtectSystem=full` 保护的位置，需明确加入 `ReadWritePaths`。涉及目录必须事先存在。
+将配置中的 `audit_log_dir` 改为上述绝对日志目录，业务目录也使用绝对路径。程序会在该目录中创建时间戳日志文件。给专用用户配置清理目录所需读写权限。根据现场路径编辑 `deploy/directory-cleaner.service`；若业务数据位于 `/usr`、`/boot` 或 `/etc` 等受 `ProtectSystem=full` 保护的位置，需明确加入 `ReadWritePaths`。涉及目录必须事先存在。
 
 ```bash
 sudo -u directory-cleaner /opt/directory-cleaner/dircleaner -config /etc/directory-cleaner/config.yaml -once -dry-run

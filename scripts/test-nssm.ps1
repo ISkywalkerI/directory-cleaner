@@ -12,7 +12,7 @@ $name = 'DirectoryCleaner-Acceptance-' + [guid]::NewGuid().ToString('N')
 $root = Join-Path ([IO.Path]::GetTempPath()) "$name with spaces"
 $reportDir = Join-Path $PSScriptRoot '../artifacts/nssm'
 $config = Join-Path $root 'directory-cleaner.yaml'
-$audit = Join-Path $root 'logs/audit.jsonl'
+$audit = Join-Path $root 'logs'
 $data = Join-Path $root 'data'
 $installed = $false
 
@@ -30,10 +30,14 @@ function Wait-Until([scriptblock]$Condition, [string]$Message) {
     throw "Timed out: $Message"
 }
 function Read-Audit {
-    if (Test-Path -LiteralPath $audit) { Get-Content -LiteralPath $audit | Where-Object { $_ } | ConvertFrom-Json }
+    Get-ChildItem -LiteralPath $audit -Filter 'dir-cleaner-*.jsonl' -File -ErrorAction SilentlyContinue |
+        Sort-Object Name |
+        ForEach-Object { Get-Content -LiteralPath $_.FullName } |
+        Where-Object { $_ } |
+        ConvertFrom-Json
 }
 function Write-Config([bool]$DryRun, [string]$StableFor = '0s') {
-    $yamlPath = (Join-Path $root 'logs/audit.jsonl').Replace('\', '/') | ConvertTo-Json -Compress
+    $yamlPath = (Join-Path $root 'logs').Replace('\', '/') | ConvertTo-Json -Compress
     $yamlData = $data.Replace('\', '/') | ConvertTo-Json -Compress
     $preview = $DryRun.ToString().ToLowerInvariant()
     @"
@@ -43,7 +47,7 @@ defaults:
   stable_for: $StableFor
   min_age: 0s
   dry_run: $preview
-  audit_log: $yamlPath
+  audit_log_dir: $yamlPath
 directories:
 - path: $yamlData
   trigger_bytes: 10
@@ -65,9 +69,9 @@ function Stop-Clean {
     Assert ($child.WaitForExit(5000)) 'Service child did not exit'
     Assert ($child.ExitCode -eq 0) "Service child did not exit gracefully: $($child.ExitCode)"
     Assert ((Get-Service $name).Status -eq 'Stopped') 'Service did not stop'
-    $length = (Get-Item -LiteralPath $audit).Length
+    $length = (Get-ChildItem -LiteralPath $audit -Filter 'dir-cleaner-*.jsonl' -File | Measure-Object Length -Sum).Sum
     Start-Sleep -Milliseconds 500
-    Assert ((Get-Item -LiteralPath $audit).Length -eq $length) 'Audit grew after stop'
+    Assert ((Get-ChildItem -LiteralPath $audit -Filter 'dir-cleaner-*.jsonl' -File | Measure-Object Length -Sum).Sum -eq $length) 'Audit grew after stop'
     Assert ($null -eq (Get-Child)) 'Service child survived stop'
 }
 

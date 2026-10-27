@@ -34,7 +34,7 @@ dircleaner -config directory-cleaner.yaml -once
 dircleaner -config directory-cleaner.yaml -once -execute
 ```
 
-配置默认 `dry_run: true`。先查看 `audit_log` 中的预演记录，确认路径后把配置改为 `dry_run: false`，或仅在手工执行时使用 `-execute`。
+配置默认 `dry_run: true`。先查看 `audit_log_dir` 中的预演记录，确认路径后把配置改为 `dry_run: false`，或仅在手工执行时使用 `-execute`。
 
 ## 配置文件说明
 
@@ -51,7 +51,7 @@ defaults:
   min_age: 10m
   max_workers: 1
   dry_run: true
-  audit_log: logs/directory-cleaner.jsonl
+  audit_log_dir: logs
 
 directories:
   - name: rundata
@@ -93,11 +93,12 @@ directories:
 | `name` | 目录的标识名称，会写入审计日志。 | `name: rundata`；不能重复。省略时自动生成 `directory-1`、`directory-2`。 |
 | `path` | 要递归扫描的根目录。 | `path: C:/3Dshape/app/rundata`；建议使用绝对路径。程序只处理普通文件，不跟随符号链接。 |
 | `scan_interval` | 连续运行时两次扫描的目标间隔。程序启动后会立即扫描一次。 | `30s` 表示 30 秒，`5m` 表示 5 分钟，`1h` 表示 1 小时；也支持 `ms` 等 Go duration 单位；必须大于 0。 |
-| `stable_for` | 文件稳定性观察时间。等待后再次比较文件大小和修改时间。 | `2m` 表示观察 2 分钟；`0s` 表示不等待，但仍会执行复核和访问检查；不能为负数。 |
+| `stable_for` | 一轮目录稳定性观察时间。先记录候选文件，统一等待后再批量比较文件大小和修改时间。 | `2m` 表示整轮统一观察 2 分钟；`0s` 表示不等待，但仍会执行复核和访问检查；不能为负数。 |
 | `min_age` | 文件最后修改后必须经过的最短时间。 | `10m` 表示至少 10 分钟未修改；`0s` 表示不设置年龄门槛；不能为负数。 |
 | `max_workers` | 同一目录进行稳定性检查时的并发 worker 数。 | `4` 表示最多并发检查 4 个文件；必须至少为 1。它不表示并发删除数量。 |
 | `dry_run` | 是否只预演而不实际删除。 | `true` 是安全默认值；`false` 才允许配置本身执行真实删除。命令行 `-dry-run` 或 `-execute` 可以覆盖所有目录。 |
-| `audit_log` | JSONL 审计日志路径。 | `logs/directory-cleaner.jsonl`；必须位于所有清理目录之外。相对路径相对于程序启动时的工作目录。 |
+| `audit_log_dir` | JSONL 审计日志目录。 | `logs`；程序每次启动和轮转时直接创建 `dir-cleaner-YYYYMMDD-HHMMSS.jsonl`，相对路径相对于程序启动时的工作目录。日志目录中的旧日志按普通文件参与清理。 |
+| `audit_log_max_bytes` | 单个活动日志的轮转阈值。 | 默认 `10MB`；填写 `0` 表示不轮转。只在 `defaults` 中配置。 |
 | `trigger_bytes` | 目录普通文件大小合计超过此值时才开始清理。 | `100GB`；必须严格大于 `target_bytes`。 |
 | `target_bytes` | 开始清理后希望达到的剩余容量。 | `80GB`；必须满足 `trigger_bytes > target_bytes >= 0`。程序按最后修改时间从旧到新考虑文件。 |
 
@@ -113,7 +114,7 @@ directories:
 | `2h` | 2 小时 |
 | `24h` | 24 小时 |
 
-因此，`scan_interval: 30s` 表示程序在连续运行时大约每 30 秒发起一次该目录的扫描；它不是 30 分钟，也不是 30 个文件。`stable_for: 30s` 的含义不同，它表示每个候选文件需要观察 30 秒，确认大小和修改时间没有变化。
+因此，`scan_interval: 30s` 表示程序在连续运行时大约每 30 秒发起一次该目录的扫描；它不是 30 分钟，也不是 30 个文件。`stable_for: 30s` 的含义不同，它表示该目录本轮候选统一观察 30 秒，之后批量确认大小和修改时间没有变化。
 
 ### 容量单位
 
@@ -150,7 +151,7 @@ Copy-Item directory-cleaner.yaml.example directory-cleaner.yaml
 go run ./cmd/dircleaner -config directory-cleaner.yaml -once -dry-run
 ```
 
-检查 `audit_log` 中的 `delete` 和 `summary` 事件，确认扫描路径、文件顺序和预计容量后，再选择以下一种方式执行：
+检查 `audit_log_dir` 中最新日志的 `delete` 和 `summary` 事件，确认扫描路径、文件顺序和预计容量后，再选择以下一种方式执行：
 
 ```text
 # 配置文件中设置 dry_run: false
@@ -183,7 +184,7 @@ sudo systemctl enable --now directory-cleaner.service
 
 ## 审计
 
-`audit_log` 为 JSONL 文件，必须位于清理目录之外。未超过触发值时写入 scan，触发清理后写入 summary；预演或成功删除的每个文件另写一条 delete 事件；锁定、权限不足、文件变化和删除失败会写入 failures。预演只列出达到目标容量所需的文件，summary 的 after_bytes 仍反映实际容量，删除数量为零。
+`audit_log_dir` 是 JSONL 审计日志目录。程序每次启动和轮转时直接创建新的时间戳文件；同一秒内追加序号。重启不会追加旧日志。日志目录中的文件按修改时间从旧到新作为普通候选处理，因此旧日志通常会先被清理。未超过触发值时写入 scan，触发清理后写入 summary；预演或成功删除的每个文件另写一条 delete 事件；锁定、权限不足、文件变化和删除失败会写入 failures。触发清理的 summary 还会给出 `current_bytes`、`planned_files`、`planned_bytes` 以及计划文件的 `planned_mod_time_from`/`planned_mod_time_to`，便于一行查看当前大小、计划数量、计划容量和文件时间范围；真实删除时另有 `deleted_mod_time_from`/`deleted_mod_time_to` 表示实际删除成功文件的时间范围。预演只列出达到目标容量所需的文件，`after_bytes` 仍反映实际容量，实际删除数量保持为零。
 
 ## 开发和测试
 

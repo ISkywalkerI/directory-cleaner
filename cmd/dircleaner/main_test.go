@@ -59,13 +59,13 @@ func cliFixture(t *testing.T, drySetting string, continuous bool) (string, strin
 			t.Fatal(err)
 		}
 	}
-	audit := filepath.Join(root, "audit.jsonl")
+	audit := filepath.Join(root, "logs")
 	cfg := filepath.Join(root, "config.yaml")
 	interval := "1h"
 	if continuous {
 		interval = "30ms"
 	}
-	text := fmt.Sprintf("version: 1\ndefaults:\n  scan_interval: %s\n  stable_for: 0s\n  min_age: 0s\n  audit_log: %q\n%sdirectories:\n- path: %q\n  trigger_bytes: 10\n  target_bytes: 4\n", interval, filepath.ToSlash(audit), drySetting, filepath.ToSlash(data))
+	text := fmt.Sprintf("version: 1\ndefaults:\n  scan_interval: %s\n  stable_for: 0s\n  min_age: 0s\n  audit_log_dir: %q\n%sdirectories:\n- path: %q\n  trigger_bytes: 10\n  target_bytes: 4\n", interval, filepath.ToSlash(audit), drySetting, filepath.ToSlash(data))
 	if err := os.WriteFile(cfg, []byte(text), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -73,20 +73,31 @@ func cliFixture(t *testing.T, drySetting string, continuous bool) (string, strin
 }
 
 func cliEvents(path string) ([]cleaner.AuditEvent, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
+	paths := []string{path}
+	if info, err := os.Stat(path); err != nil {
 		return nil, err
-	}
-	var result []cleaner.AuditEvent
-	for _, line := range bytes.Split(bytes.TrimSpace(b), []byte("\n")) {
-		if len(line) == 0 {
-			continue
-		}
-		var e cleaner.AuditEvent
-		if err := json.Unmarshal(line, &e); err != nil {
+	} else if info.IsDir() {
+		paths, err = filepath.Glob(filepath.Join(path, "dir-cleaner-*.jsonl"))
+		if err != nil {
 			return nil, err
 		}
-		result = append(result, e)
+	}
+	var result []cleaner.AuditEvent
+	for _, current := range paths {
+		b, err := os.ReadFile(current)
+		if err != nil {
+			return nil, err
+		}
+		for _, line := range bytes.Split(bytes.TrimSpace(b), []byte("\n")) {
+			if len(line) == 0 {
+				continue
+			}
+			var e cleaner.AuditEvent
+			if err := json.Unmarshal(line, &e); err != nil {
+				return nil, err
+			}
+			result = append(result, e)
+		}
 	}
 	return result, nil
 }
