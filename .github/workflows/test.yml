@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, ubuntu-22.04, ubuntu-24.04]
+        os: [windows-2022, windows-11-arm, ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
         go: ['1.25.12']
         include:
           - os: ubuntu-22.04
@@ -36,14 +36,14 @@ jobs:
         if: runner.os == 'Linux'
         run: bash scripts/test.sh
       - name: Build and verify release packages
-        if: matrix.go == '1.25.12'
+        if: matrix.go == '1.25.12' && matrix.os != 'windows-11-arm'
         shell: pwsh
         run: |
           ./scripts/build.ps1 | Set-Content artifacts/release-path.txt
           if (-not $?) { throw 'Release build failed' }
           ./scripts/test-release.ps1 -ReleaseDirectory (Get-Content artifacts/release-path.txt)
       - name: Keep release packages
-        if: matrix.go == '1.25.12'
+        if: matrix.go == '1.25.12' && matrix.os != 'windows-11-arm'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-${{ matrix.os }}
@@ -54,7 +54,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Windows NSSM service acceptance
-        if: runner.os == 'Windows'
+        if: matrix.os == 'windows-2022'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -62,7 +62,9 @@ jobs:
           ./scripts/test-nssm.ps1 -Nssm "$root/tools/nssm.exe" -Exe "$root/dircleaner.exe"
       - name: Ubuntu systemd service acceptance
         if: runner.os == 'Linux' && matrix.go == '1.25.12'
-        run: sudo bash scripts/test-systemd.sh "$(cat artifacts/release-path.txt)/linux-amd64/directory-cleaner/dircleaner"
+        env:
+          TARGET_ARCH: ${{ endsWith(matrix.os, '-arm') && 'arm64' || 'amd64' }}
+        run: sudo bash scripts/test-systemd.sh "$(cat artifacts/release-path.txt)/linux-$TARGET_ARCH/directory-cleaner/dircleaner"
       - name: Keep test reports (including skips)
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -76,44 +78,17 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  cross-build:
-    name: Build only (${{ matrix.os }}/${{ matrix.arch }})
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows, linux]
-        arch: [amd64, arm64]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.25.12'
-      - name: Cross compile (no runtime verification)
-        env:
-          GOOS: ${{ matrix.os }}
-          GOARCH: ${{ matrix.arch }}
-          CGO_ENABLED: '0'
-        run: |
-          mkdir -p artifacts
-          go mod download
-          go mod verify
-          suffix=''; [[ "$GOOS" != windows ]] || suffix='.exe'
-          go build -o "artifacts/dircleaner-$GOOS-$GOARCH$suffix" ./cmd/dircleaner
-
   ci:
     name: CI
     if: always()
-    needs: [native, cross-build]
+    needs: [native]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - name: Require every matrix job
         env:
           NATIVE: ${{ needs.native.result }}
-          CROSS_BUILD: ${{ needs.cross-build.result }}
-        run: test "$NATIVE" = success && test "$CROSS_BUILD" = success
+        run: test "$NATIVE" = success
 
   release:
     name: Publish tagged release

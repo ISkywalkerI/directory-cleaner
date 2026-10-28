@@ -6,11 +6,11 @@
 | --- | --- | --- |
 | 配置和内部清理 | `go test ./...` | 默认预演、继承/覆盖、字节范围、非法配置、触发阈值、递归、旧文件优先、目标停止、年龄、稳定性、删除前复核、取消、符号链接和 JSONL 审计通过 |
 | 真实 CLI | 同一 Go 测试命令 | 编译真实二进制，验证默认预演、`-dry-run`/`-execute`、配置删除、错误退出码、Unicode/空格路径、重复扫描；Windows 真实 Ctrl+Break、Ubuntu SIGINT 均须在 5 秒内正常退出 |
-| Windows 原生 | `pwsh -File scripts/test.ps1` | Go 1.25.12，格式、PowerShell 脚本语法、依赖校验、vet、测试、覆盖率、构建；真实文件锁保护通过 |
-| Ubuntu 原生 | `bash scripts/test.sh` | Ubuntu 22.04/24.04 + Go 1.25.12，额外 Ubuntu 22.04 + Go 1.21.13；包括权限、FIFO 和 race 检查 |
+| Windows 原生 | `pwsh -File scripts/test.ps1` | Windows Server 2022 amd64、Windows 11 ARM64 + Go 1.25.12；格式、PowerShell 脚本语法、依赖校验、vet、测试、覆盖率和原生构建；真实文件锁保护通过 |
+| Ubuntu 原生 | `bash scripts/test.sh` | Ubuntu 22.04/24.04 amd64 与 ARM64 + Go 1.25.12，额外 Ubuntu 22.04 amd64 + Go 1.21.13；包括权限、FIFO 和 race 检查 |
 | Windows 服务 | 管理员 `pwsh -File scripts/test-nssm.ps1 -Nssm <nssm.exe路径>` | 在 Windows Server 2022 实际安装唯一临时 NSSM 服务，验证预演、stop/start/restart、崩溃后恢复、优雅取消、真实删除、卸载；禁用窗口/线程消息和强制终止兜底，子进程必须退出码 0 |
-| Ubuntu 服务 | `sudo bash scripts/test-systemd.sh` | 在 Ubuntu 22.04/24.04 实际安装仓库 unit（只替换测试路径和专用账号），验证 enable、启动、停止、重启、异常恢复、取消审计、真实删除和卸载；必须使用真实 systemd，停止后退出状态和 Result 均正常 |
-| 交叉编译 | 脚本交叉编译参数或 CI Build only 作业 | Windows/Linux × amd64/arm64 全部编译成功；只证明可构建 |
+| Ubuntu 服务 | `sudo bash scripts/test-systemd.sh` | 在 Ubuntu 22.04/24.04 amd64 与 ARM64 实际安装仓库 unit（只替换测试路径和专用账号），验证 enable、启动、停止、重启、异常恢复、取消审计、真实删除和卸载；必须使用真实 systemd，停止后退出状态和 Result 均正常 |
+| 可选交叉编译 | 本地脚本的 `-CrossCompile` 或 `--cross-compile` 参数 | Windows/Linux × amd64/arm64 全部编译成功；CI 对这些系统架构使用原生 runner 验证 |
 | 发布包 | `pwsh -File scripts/build.ps1` 和 `pwsh -File scripts/test-release.ps1 -ReleaseDirectory <版本目录>` | 三目标架构、静态 Linux、CGO、版本、SHA256、严格文件清单、tar 执行权限通过；本机包解压后版本查询、启动预演、空格路径、任意工作目录、配置和审计保留通过 |
 | 合并门禁 | GitHub Actions `CI` | 所有矩阵作业 success；失败、取消和跳过作业均不能放行 |
 
@@ -57,4 +57,4 @@ Windows CLI 子进程使用独立隐藏控制台；辅助进程附加该控制�
 
 ## 验收记录
 
-每次记录：提交 SHA、系统/架构、Go 与服务管理器版本、使用的配置路径、测试命令、CI run URL、通过/失败/skip、预演与删除的 JSONL 样例、剩余文件、服务停止/重启结果及验收人。ARM64 必须标注“仅交叉编译，未做运行时验收”。有未通过项目时不得标注部署通过。
+每次记录：提交 SHA、系统/架构、Go 与服务管理器版本、使用的配置路径、测试命令、CI run URL、通过/失败/skip、预演与删除的 JSONL 样例、剩余文件、服务停止/重启结果及验收人。CI 已在 Windows 和 Linux ARM64 runner 原生构建并运行程序；目标部署机器的账号、ACL 和启动行为仍需单独验收。有未通过项目时不得标注部署通过。

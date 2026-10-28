@@ -695,17 +695,16 @@ Go 是构建源码的工具链。发布包已经包含编译后的程序，目�
 | 范围 | 目标 |
 | --- | --- |
 | 发布包 | Windows amd64、Linux amd64、Linux arm64 |
-| CI 交叉编译 | Windows/Linux × amd64/arm64 四种组合 |
-| 原生自动运行验证 | Windows Server 2022、Ubuntu 22.04/24.04 的 amd64 作业 |
+| CI 原生构建与运行验证 | Windows Server 2022 amd64、Windows 11 ARM64、Ubuntu 22.04/24.04 amd64 与 ARM64 |
 | Go 兼容性 | 常规源码最低 Go 1.21；当前主测试/发布工具链固定 Go 1.25.12，CI 另有 Go 1.21.13 作业 |
 
-“能够交叉编译”只说明能生成对应平台文件，不能证明已在那种 CPU 和系统上实际运行，尤其不能把 ARM64 结构检查当作 ARM64 运行验收。
+交叉编译只证明能生成对应平台文件。当前 CI 在 Windows 和 Linux ARM64 runner 上原生构建并运行程序；目标机器的账号、权限和服务启动行为仍需按部署环境验收。
 
 发布脚本通过链接参数填写 `main.version`、`main.commit`、`main.buildTime`。普通开发构建保留默认的 `dev / unknown / unknown`；`-version` 只是读取这些编译时信息，不向外部服务器查询版本。
 
 ### 16.3 测试和发布链条
 
-[GitHub Actions 配置](../.github/workflows/test.yml) 定义：原生测试、Ubuntu 竞态检查、发布包构建与验证、真实 NSSM/systemd 服务验收、四组合交叉编译，以及汇总门禁 `CI`。标签发布依赖同次运行的门禁通过，并使用该次测试产生的包。
+[GitHub Actions 配置](../.github/workflows/test.yml) 定义：Windows 与 Ubuntu amd64/ARM64 原生测试、Ubuntu 竞态检查、发布包构建与验证、真实 NSSM/systemd 服务验收，以及汇总门禁 `CI`。Linux ARM64 会运行 ARM64 发布包和 systemd 验收；标签发布依赖同次运行的门禁通过，并使用该次测试产生的包。
 
 服务验收脚本使用唯一临时服务名、可丢弃数据和自动清理；检查安装、启停、重启、崩溃恢复、停止后审计不再增长、取消时最后审计写出、真实删除和卸载。服务验收缺少管理员/root 或实际服务管理器时应失败，不用跳过掩盖。
 

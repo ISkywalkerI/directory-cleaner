@@ -24,7 +24,7 @@ pwsh -NoProfile -File scripts/test-release.ps1 -ReleaseDirectory artifacts/relea
 
 版本取当前提交的 `v*` tag（多个时取最高版本），无 tag 时为 UTC 时间和短 commit；本地未提交修改标记 `dirty`。tag 发布要求干净工作区。`dircleaner -version` 无需读取配置即可查询构建信息；发布脚本固定工具链，普通源码开发仍支持 Go 1.21+。
 
-每次 push、PR、手动运行，CI 构建并上传发布包，在 Windows、Ubuntu 22.04/24.04 上解压和验证本机包，并用发布二进制运行现有服务验收。`v*` tag push 在同一次运行的全部 `CI` 门禁通过后自动发布。按仓库流程先合并通过 CI 的 PR，再对已合并提交创建 tag；不要在未经检查的提交上发布。ARM64 包仅交叉编译和结构检查，尚无 ARM64 原生运行门禁。
+每次 push、PR、手动运行，CI 构建并上传发布包，在 Windows、Ubuntu 22.04/24.04 上解压和验证本机包，并用发布二进制运行现有服务验收。Windows/Linux amd64 和 ARM64 均由原生 runner 构建、测试；Linux ARM64 还运行发布包和 systemd 服务验收。`v*` tag push 在同一次运行的全部 `CI` 门禁通过后自动发布。按仓库流程先合并通过 CI 的 PR，再对已合并提交创建 tag；不要在未经检查的提交上发布。Windows ARM64 原生测试不代表提供 Windows ARM64 发布包。
 
 发布包不含现场 YAML、日志和业务数据。升级前停止进程，将新包解压到暂存目录后只更新程序资产，保留现场文件；禁止清空安装目录或使用带删除语义的镜像同步。首次部署的配置复制步骤不适用于升级。
 
@@ -207,6 +207,6 @@ bash scripts/test.sh --cross-compile
 
 省略交叉编译参数只执行本机检查。报告在 `artifacts/`；测试通过 Go 标准库创建临时目录，调用真实二进制验证预演、删除和连续运行，不读取实际业务配置。
 
-每次 push、PR 和手动触发均运行 Windows Server 2022、Ubuntu 22.04/24.04 x64 原生测试，额外校验 Go 1.21.13，并编译 Windows/Linux 的 amd64/arm64。Windows 连续运行测试发送真实 Ctrl+Break 并要求正常退出。CI 还会实际安装临时 NSSM/systemd 服务，验证预演、启停、重启、异常恢复、优雅取消、真实删除和卸载；NSSM 禁用强制终止兜底。`CI` 汇总检查是合并门禁。ARM64 仅验证可构建。
+每次 push、PR 和手动触发均运行 Windows Server 2022 amd64、Windows 11 ARM64、Ubuntu 22.04/24.04 amd64 和 ARM64 原生测试，额外在 Ubuntu 22.04 amd64 校验 Go 1.21.13。Windows 连续运行测试发送真实 Ctrl+Break 并要求正常退出。CI 还会实际安装临时 NSSM/systemd 服务，验证预演、启停、重启、异常恢复、优雅取消、真实删除和卸载；NSSM 禁用强制终止兜底。Linux ARM64 使用对应架构的发布二进制进行 systemd 验收。`CI` 汇总检查是合并门禁。
 
 测试矩阵、跳过项和 NSSM/systemd 部署验收见 [全流程测试与部署验收](docs/testing.md)。较大修改必须补回归测试并通过完整 CI 后才可部署。
