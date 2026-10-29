@@ -32,6 +32,26 @@ editor directory-cleaner.yaml
 
 Windows 的 `-ExecutionPolicy Bypass` 仅作用于当前启动进程，不修改机器策略；应先核对发布包 SHA256，现场组策略仍可能禁止运行脚本，此时可在包目录直接执行二进制。
 
+启动脚本将工作目录固定为包目录，透传全部参数并保留退出码；从其他目录启动也使用包内默认配置。`-config` 和 YAML 中的相对路径相对于此工作目录。直接调用 `dircleaner.exe` 时，相对路径相对于当前工作目录，因此请先进入 `directory-cleaner` 安装目录再启动；通过本项目的 NSSM 安装脚本启动服务时，脚本会将工作目录设为安装目录，无需额外处理。
+
+默认审计日志目录在 `logs`，可以位于清理目录内。程序每次启动和轮转时直接创建时间戳日志文件；日志目录中的文件按修改时间从旧到新作为普通清理候选。先查看 JSONL 中的预演结果，再按业务授权修改配置。`-execute` 会覆盖所有目录的预演设置并真实删除文件。
+
+## Windows NSSM 服务（可选）
+
+包内 `tools/nssm.exe` 为固定版 2.24-101-g897c7ad 的 x64 程序。管理员 PowerShell 执行：
+
+```powershell
+.\deploy\install-nssm.ps1 -Root C:\Apps\directory-cleaner
+Get-Service DirectoryCleaner
+Stop-Service DirectoryCleaner
+Start-Service DirectoryCleaner
+Restart-Service DirectoryCleaner
+# 卸载前停止服务；不删除配置、日志和业务数据
+.\tools\nssm.exe remove DirectoryCleaner confirm
+```
+
+安装脚本默认使用随包 NSSM，可用 `-Nssm`、`-Config`、`-ServiceName` 指定工具、配置和服务名。NSSM 服务日志在 `nssmlogs/service.out.log`、`nssmlogs/service.err.log`；程序审计日志仍按 `audit_log_dir` 配置写入。根据现场 ACL 配置服务账号，验证真实停止时审计已写完。
+
 如果 PowerShell 提示“在此系统上禁止运行脚本”，可在管理员 PowerShell 中临时放行当前窗口，然后运行安装脚本：
 
 ```powershell
@@ -56,26 +76,6 @@ Get-ExecutionPolicy -List
 ```powershell
 Unblock-File .\deploy\install-nssm.ps1
 ```
-
-启动脚本将工作目录固定为包目录，透传全部参数并保留退出码；从其他目录启动也使用包内默认配置。`-config` 和 YAML 中的相对路径相对于此工作目录。直接调用二进制时相对于调用者当前目录。
-
-默认审计日志目录在 `logs`，可以位于清理目录内。程序每次启动和轮转时直接创建时间戳日志文件；日志目录中的文件按修改时间从旧到新作为普通清理候选。先查看 JSONL 中的预演结果，再按业务授权修改配置。`-execute` 会覆盖所有目录的预演设置并真实删除文件。
-
-## Windows NSSM 服务（可选）
-
-包内 `tools/nssm.exe` 为固定版 2.24-101-g897c7ad 的 x64 程序。管理员 PowerShell 执行：
-
-```powershell
-.\deploy\install-nssm.ps1 -Root C:\Apps\directory-cleaner
-Get-Service DirectoryCleaner
-Stop-Service DirectoryCleaner
-Start-Service DirectoryCleaner
-Restart-Service DirectoryCleaner
-# 卸载前停止服务；不删除配置、日志和业务数据
-.\tools\nssm.exe remove DirectoryCleaner confirm
-```
-
-安装脚本默认使用随包 NSSM，可用 `-Nssm`、`-Config`、`-ServiceName` 指定工具、配置和服务名。服务日志在 `logs/service.out.log`、`logs/service.err.log`。根据现场 ACL 配置服务账号，验证真实停止时审计已写完。
 
 ## Ubuntu systemd 服务（可选）
 

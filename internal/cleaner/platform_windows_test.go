@@ -27,7 +27,7 @@ func TestWindowsLockedFileIsPreserved(t *testing.T) {
 	if ok, _ := stable(context.Background(), f.Path, f.Size, f.ModTime, 0); ok {
 		t.Fatal("locked file stable")
 	}
-	if ok, err := remove(f.Path, f.Size, f.ModTime, false); ok || err == nil {
+	if result, err := remove(f.Path, f.Size, f.ModTime, false); result.validated || result.deleted || err == nil {
 		t.Fatal("locked file removed")
 	}
 	if _, err := os.Stat(f.Path); err != nil {

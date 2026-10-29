@@ -562,9 +562,9 @@ flowchart TD
 | `file` | 文件事件中的路径、大小、修改时间；没有时省略 |
 | `reason` | 预演文件事件中为 `dry_run`；没有时省略 |
 | `current_bytes` | summary 中本轮扫描得到的当前普通文件总大小；没有触发清理时省略 |
-| `planned_files` | summary 中成功通过稳定性和删除前复核、并被列入本轮计划的文件数 |
-| `planned_bytes` | summary 中计划处理文件的快照字节总量 |
-| `planned_mod_time_from` / `planned_mod_time_to` | summary 中计划文件按最后修改时间的起止范围；不是扫描耗时 |
+| `planned_files` | summary 中通过稳定性和删除前最终复核、并列入本轮计划的文件数；dry-run 时表示计划删除数 |
+| `planned_bytes` | 上述计划文件的快照字节总量；最终复核失败的文件不计入，复核通过但系统删除失败的文件仍计入 |
+| `planned_mod_time_from` / `planned_mod_time_to` | 上述计划文件按最后修改时间的起止范围；不是扫描耗时 |
 | `deleted_mod_time_from` / `deleted_mod_time_to` | 真实模式 summary 中实际删除成功文件按最后修改时间的起止范围；预演时省略 |
 
 ### 14.2 三类事件不是每轮都有

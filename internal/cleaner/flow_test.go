@@ -57,25 +57,48 @@ func readEvents(t *testing.T, path string) []AuditEvent {
 
 func TestScanThresholdOrderAndDryRun(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		trigger int64
-		dry     bool
-		deletes int
+		name        string
+		trigger     int64
+		target      int64
+		dry         bool
+		sizes       []int
+		deletes     int
+		wantAfter   int64
+		wantDeleted int64
 	}{
-		{"below", 20, false, 0}, {"equal", 12, false, 0}, {"execute", 10, false, 2}, {"preview", 10, true, 2},
+		{name: "below", trigger: 20, target: 4, sizes: []int{4, 4, 4}, wantAfter: 12},
+		{name: "equal", trigger: 12, target: 4, sizes: []int{4, 4, 4}, wantAfter: 12},
+		{name: "execute", trigger: 10, target: 4, sizes: []int{4, 4, 4}, deletes: 2, wantAfter: 4, wantDeleted: 8},
+		{name: "preview", trigger: 10, target: 4, dry: true, sizes: []int{4, 4, 4}, deletes: 2, wantAfter: 12},
+		{name: "uneven sizes stop below target", trigger: 10, target: 4, sizes: []int{7, 3, 2}, deletes: 2, wantAfter: 2, wantDeleted: 10},
+		{name: "zero target", trigger: 1, target: 0, sizes: []int{4, 3}, deletes: 2, wantAfter: 0, wantDeleted: 7},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			data := filepath.Join(root, "data")
-			old := fixtureFile(t, data, "old", 3*time.Hour)
-			middle := fixtureFile(t, data, "nested/middle", 2*time.Hour)
-			newest := fixtureFile(t, data, "new", time.Hour)
+			candidates := make([]fileCandidate, len(tc.sizes))
+			for i, size := range tc.sizes {
+				name := fmt.Sprintf("file-%d", i)
+				candidates[i] = fixtureFile(t, data, name, time.Duration(len(tc.sizes)-i)*time.Hour)
+				if err := os.WriteFile(candidates[i].Path, bytes.Repeat([]byte{'x'}, size), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chtimes(candidates[i].Path, candidates[i].ModTime, candidates[i].ModTime); err != nil {
+					t.Fatal(err)
+				}
+				info, err := os.Lstat(candidates[i].Path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				candidates[i].Size = info.Size()
+				candidates[i].ModTime = info.ModTime()
+			}
 			logDir := filepath.Join(root, "logs")
 			logger, err := NewLogger(logDir, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
-			NewScanner(logger).RunOnce(context.Background(), config.ResolvedDirectory{Name: "data", Path: data, TriggerBytes: tc.trigger, TargetBytes: 4, MaxWorkers: 2, DryRun: tc.dry})
+			NewScanner(logger).RunOnce(context.Background(), config.ResolvedDirectory{Name: "data", Path: data, TriggerBytes: tc.trigger, TargetBytes: tc.target, MaxWorkers: 2, DryRun: tc.dry})
 			if err := logger.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -85,7 +108,11 @@ func TestScanThresholdOrderAndDryRun(t *testing.T) {
 			}
 			events := readEvents(t, files[0])
 			last := events[len(events)-1]
-			if last.BeforeBytes != 12 || len(last.Failures) != 0 || len(events) != tc.deletes+1 {
+			var total int64
+			for _, size := range tc.sizes {
+				total += int64(size)
+			}
+			if last.BeforeBytes != total || len(last.Failures) != 0 || len(events) != tc.deletes+1 {
 				t.Fatalf("unexpected audit: %+v", events)
 			}
 			if tc.deletes == 0 {
@@ -93,27 +120,34 @@ func TestScanThresholdOrderAndDryRun(t *testing.T) {
 					t.Fatal(last)
 				}
 			} else {
-				if last.Action != "summary" || events[0].File.Path != old.Path || events[1].File.Path != middle.Path {
+				if last.Action != "summary" {
 					t.Fatalf("wrong deletion order: %+v", events)
 				}
+				for i := 0; i < tc.deletes; i++ {
+					if events[i].File.Path != candidates[i].Path {
+						t.Fatalf("wrong deletion order: %+v", events)
+					}
+				}
 			}
-			wantAfter := int64(12)
-			wantDeleted := 0
-			if !tc.dry {
-				wantAfter -= int64(tc.deletes * 4)
-				wantDeleted = tc.deletes
+			wantDeletedFiles := tc.deletes
+			if tc.dry {
+				wantDeletedFiles = 0
 			}
-			if last.AfterBytes != wantAfter || last.DeletedFiles != wantDeleted || last.DeletedBytes != int64(wantDeleted*4) {
+			if last.AfterBytes != tc.wantAfter || last.DeletedFiles != wantDeletedFiles || last.DeletedBytes != tc.wantDeleted {
 				t.Fatalf("wrong counts: %+v", last)
 			}
 			if tc.deletes > 0 {
-				if last.CurrentBytes == nil || *last.CurrentBytes != 12 {
+				if last.CurrentBytes == nil || *last.CurrentBytes != total {
 					t.Fatalf("wrong current bytes: %+v", last)
 				}
 				if last.PlannedFiles == nil || *last.PlannedFiles != tc.deletes {
 					t.Fatalf("wrong planned file count: %+v", last)
 				}
-				if last.PlannedBytes == nil || *last.PlannedBytes != int64(tc.deletes*4) {
+				var plannedBytes int64
+				for i := 0; i < tc.deletes; i++ {
+					plannedBytes += int64(tc.sizes[i])
+				}
+				if last.PlannedBytes == nil || *last.PlannedBytes != plannedBytes {
 					t.Fatalf("wrong planned bytes: %+v", last)
 				}
 				if last.PlannedFrom == nil || last.PlannedTo == nil || last.PlannedFrom.After(*last.PlannedTo) {
@@ -127,9 +161,9 @@ func TestScanThresholdOrderAndDryRun(t *testing.T) {
 					t.Fatalf("wrong deleted time range: %+v", last)
 				}
 			}
-			for _, f := range []fileCandidate{old, middle, newest} {
+			for i, f := range candidates {
 				_, err := os.Stat(f.Path)
-				shouldExist := tc.dry || tc.deletes == 0 || f.Path == newest.Path
+				shouldExist := tc.dry || i >= tc.deletes
 				if shouldExist && err != nil {
 					t.Fatal(err)
 				}
@@ -139,6 +173,138 @@ func TestScanThresholdOrderAndDryRun(t *testing.T) {
 			}
 			if tc.dry && tc.deletes > 0 && (events[0].Reason != "dry_run" || !events[0].DryRun) {
 				t.Fatal(events[0])
+			}
+		})
+	}
+}
+
+func TestScanReportsChangedCandidate(t *testing.T) {
+	root := t.TempDir()
+	data := filepath.Join(root, "data")
+	old := fixtureFile(t, data, "old", 3*time.Hour)
+	middle := fixtureFile(t, data, "middle", 2*time.Hour)
+	newest := fixtureFile(t, data, "new", time.Hour)
+	logDir := filepath.Join(root, "logs")
+	logger, err := NewLogger(logDir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := make(chan error, 1)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		changed <- os.WriteFile(old.Path, []byte("changed size"), 0600)
+	}()
+	NewScanner(logger).RunOnce(context.Background(), config.ResolvedDirectory{Name: "data", Path: data, TriggerBytes: 1, TargetBytes: 4, StableFor: 500 * time.Millisecond, MaxWorkers: 1})
+	if err := <-changed; err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(logDir, "dir-cleaner-*.jsonl"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("unexpected log files: %v %v", files, err)
+	}
+	events := readEvents(t, files[0])
+	if len(events) != 3 || events[0].Action != "delete" || events[0].File == nil || events[0].File.Path != middle.Path || events[1].Action != "delete" || events[1].File == nil || events[1].File.Path != newest.Path || events[2].Action != "summary" {
+		t.Fatalf("unexpected events: %+v", events)
+	}
+	summary := events[2]
+	if summary.DeletedFiles != 2 || summary.DeletedBytes != 8 || summary.AfterBytes != 4 || len(summary.Failures) != 1 || !strings.Contains(summary.Failures[0], old.Path) || !strings.Contains(summary.Failures[0], "changed_during_observation") {
+		t.Fatalf("unexpected summary: %+v", summary)
+	}
+	if summary.PlannedFiles == nil || *summary.PlannedFiles != 2 || summary.PlannedBytes == nil || *summary.PlannedBytes != 8 {
+		t.Fatalf("unstable candidate counted in plan: %+v", summary)
+	}
+	for _, path := range []string{old.Path} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected file to remain %q: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(data, "middle")); !os.IsNotExist(err) {
+		t.Fatalf("expected middle file to be deleted: %v", err)
+	}
+	if _, err := os.Stat(newest.Path); !os.IsNotExist(err) {
+		t.Fatalf("expected newest file to be deleted: %v", err)
+	}
+}
+
+func TestScanPlannedCountsRequireFinalValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		dryRun            bool
+		validatedOnError  bool
+		wantPlannedFiles  int
+		wantPlannedBytes  int64
+		wantDeletedFiles  int
+		wantDeletedBytes  int64
+		wantAfterBytes    int64
+		wantDeleteEvents  int
+		wantFirstPlanFile int
+	}{
+		{name: "final validation failed", wantPlannedFiles: 1, wantPlannedBytes: 4, wantDeletedFiles: 1, wantDeletedBytes: 4, wantAfterBytes: 8, wantDeleteEvents: 1, wantFirstPlanFile: 1},
+		{name: "dry run final validation failed", dryRun: true, wantPlannedFiles: 1, wantPlannedBytes: 4, wantAfterBytes: 12, wantDeleteEvents: 1, wantFirstPlanFile: 1},
+		{name: "delete failed after validation", validatedOnError: true, wantPlannedFiles: 2, wantPlannedBytes: 8, wantDeletedFiles: 1, wantDeletedBytes: 4, wantAfterBytes: 8, wantDeleteEvents: 1, wantFirstPlanFile: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			data := filepath.Join(root, "data")
+			candidates := []fileCandidate{
+				fixtureFile(t, data, "old", 3*time.Hour),
+				fixtureFile(t, data, "middle", 2*time.Hour),
+				fixtureFile(t, data, "new", time.Hour),
+			}
+			logger, err := NewLogger(filepath.Join(root, "logs"), 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			scanner := NewScanner(logger)
+			scanner.removeCandidate = func(path string, size int64, modTime time.Time, dryRun bool) (removalResult, error) {
+				if path == candidates[0].Path {
+					if tc.validatedOnError {
+						return removalResult{validated: true}, fmt.Errorf("remove denied")
+					}
+					return removalResult{}, fmt.Errorf("changed_before_delete")
+				}
+				return remove(path, size, modTime, dryRun)
+			}
+			scanner.RunOnce(context.Background(), config.ResolvedDirectory{
+				Name: "data", Path: data, TriggerBytes: 1, TargetBytes: 8,
+				MaxWorkers: 1, DryRun: tc.dryRun,
+			})
+			if err := logger.Close(); err != nil {
+				t.Fatal(err)
+			}
+			files, err := filepath.Glob(filepath.Join(root, "logs", "dir-cleaner-*.jsonl"))
+			if err != nil || len(files) != 1 {
+				t.Fatalf("unexpected log files: %v %v", files, err)
+			}
+			events := readEvents(t, files[0])
+			summary := events[len(events)-1]
+			if summary.Action != "summary" || len(events) != tc.wantDeleteEvents+1 {
+				t.Fatalf("unexpected events: %+v", events)
+			}
+			if summary.PlannedFiles == nil || *summary.PlannedFiles != tc.wantPlannedFiles || summary.PlannedBytes == nil || *summary.PlannedBytes != tc.wantPlannedBytes {
+				t.Fatalf("wrong planned counts: %+v", summary)
+			}
+			if summary.DeletedFiles != tc.wantDeletedFiles || summary.DeletedBytes != tc.wantDeletedBytes || summary.AfterBytes != tc.wantAfterBytes {
+				t.Fatalf("wrong actual counts: %+v", summary)
+			}
+			if summary.PlannedFrom == nil || !summary.PlannedFrom.Equal(candidates[tc.wantFirstPlanFile].ModTime) || summary.PlannedTo == nil || !summary.PlannedTo.Equal(candidates[tc.wantPlannedFiles+tc.wantFirstPlanFile-1].ModTime) {
+				t.Fatalf("wrong planned time range: %+v", summary)
+			}
+			if len(summary.Failures) != 1 || !strings.Contains(summary.Failures[0], candidates[0].Path) {
+				t.Fatalf("expected first candidate failure: %+v", summary)
+			}
+			for i, candidate := range candidates {
+				_, statErr := os.Stat(candidate.Path)
+				shouldExist := tc.dryRun || i == 0 || i == 2
+				if shouldExist && statErr != nil {
+					t.Fatalf("expected file to remain %q: %v", candidate.Path, statErr)
+				}
+				if !shouldExist && !os.IsNotExist(statErr) {
+					t.Fatalf("expected file to be deleted %q: %v", candidate.Path, statErr)
+				}
 			}
 		})
 	}
@@ -198,8 +364,8 @@ func TestStableAndRemoveRecheck(t *testing.T) {
 	if ok, reason := stable(context.Background(), f.Path, f.Size, f.ModTime, 0); !ok {
 		t.Fatal(reason)
 	}
-	if ok, err := remove(f.Path, f.Size, f.ModTime, true); !ok || err != nil {
-		t.Fatalf("%v %v", ok, err)
+	if result, err := remove(f.Path, f.Size, f.ModTime, true); !result.validated || result.deleted || err != nil {
+		t.Fatalf("%+v %v", result, err)
 	}
 	if err := os.WriteFile(f.Path, []byte("changed size"), 0600); err != nil {
 		t.Fatal(err)
@@ -207,8 +373,8 @@ func TestStableAndRemoveRecheck(t *testing.T) {
 	if ok, reason := stable(context.Background(), f.Path, f.Size, f.ModTime, 0); ok || reason != "changed_during_observation" {
 		t.Fatalf("%v %s", ok, reason)
 	}
-	if ok, err := remove(f.Path, f.Size, f.ModTime, false); ok || err == nil || err.Error() != "changed_before_delete" {
-		t.Fatalf("%v %v", ok, err)
+	if result, err := remove(f.Path, f.Size, f.ModTime, false); result.validated || result.deleted || err == nil || err.Error() != "changed_before_delete" {
+		t.Fatalf("%+v %v", result, err)
 	}
 	if _, err := os.Stat(f.Path); err != nil {
 		t.Fatal(err)
@@ -219,7 +385,7 @@ func TestStableAndRemoveRecheck(t *testing.T) {
 	if ok, _ := stable(context.Background(), f.Path, f.Size, f.ModTime, 0); ok {
 		t.Fatal("missing file stable")
 	}
-	if ok, err := remove(f.Path, f.Size, f.ModTime, false); ok || err == nil {
+	if result, err := remove(f.Path, f.Size, f.ModTime, false); result.validated || result.deleted || err == nil {
 		t.Fatal("missing file removed")
 	}
 }
@@ -267,6 +433,60 @@ func TestCheckStabilityWaitsOncePerBatch(t *testing.T) {
 	}
 }
 
+func TestRunIndexedCancellationReturnsFirstUnsubmittedIndex(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	dispatched := make([]int, 0, 3)
+	done := make(chan int, 1)
+	go func() {
+		done <- runIndexed(ctx, 3, 1, func(index int) {
+			dispatched = append(dispatched, index)
+			if index == 0 {
+				close(started)
+				<-release
+			}
+		})
+	}()
+	<-started
+	cancel()
+	close(release)
+	next := <-done
+	if next == 0 || next > 3 || len(dispatched) != next {
+		t.Fatalf("first unsubmitted index = %d, dispatched = %v", next, dispatched)
+	}
+	for index, dispatchedIndex := range dispatched {
+		if dispatchedIndex != index {
+			t.Fatalf("dispatched indexes = %v", dispatched)
+		}
+	}
+}
+
+func TestCheckStabilityCancellationDuringStableFor(t *testing.T) {
+	root := t.TempDir()
+	candidates := []fileCandidate{
+		fixtureFile(t, root, "first", time.Hour),
+		fixtureFile(t, root, "second", time.Hour),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	timer := time.AfterFunc(50*time.Millisecond, cancel)
+	defer func() {
+		timer.Stop()
+		cancel()
+	}()
+	results := checkStability(ctx, candidates, config.ResolvedDirectory{
+		StableFor:  time.Hour,
+		MinAge:     0,
+		MaxWorkers: 1,
+	})
+	for index, result := range results {
+		if result.ready || result.reason != "cancelled" {
+			t.Fatalf("candidate %d was not cancelled: %+v", index, result)
+		}
+	}
+}
+
 func TestSymlinkDirectoryAndRemove(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
@@ -283,8 +503,8 @@ func TestSymlinkDirectoryAndRemove(t *testing.T) {
 	if err := os.Symlink(target.Path, fileLink); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := remove(fileLink, target.Size, target.ModTime, false); ok || err == nil || !strings.Contains(err.Error(), "symlink") {
-		t.Fatalf("%v %v", ok, err)
+	if result, err := remove(fileLink, target.Size, target.ModTime, false); result.validated || result.deleted || err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("%+v %v", result, err)
 	}
 	if _, err := os.Stat(target.Path); err != nil {
 		t.Fatal(err)

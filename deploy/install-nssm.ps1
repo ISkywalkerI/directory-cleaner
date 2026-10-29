@@ -21,7 +21,7 @@ function Invoke-Nssm {
     & $nssmPath @args
     if ($LASTEXITCODE -ne 0) { throw "nssm $args failed ($LASTEXITCODE)" }
 }
-$logs = Join-Path $Root "logs"
+$logs = Join-Path $Root "nssmlogs"
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
 
 Invoke-Nssm install $ServiceName $exe "-config `"$Config`""
