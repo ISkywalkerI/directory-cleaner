@@ -184,7 +184,7 @@ sudo systemctl enable --now directory-cleaner.service
 
 ## 审计
 
-`audit_log_dir` 是 JSONL 审计日志目录。程序每次启动和轮转时直接创建新的时间戳文件；同一秒内追加序号。重启不会追加旧日志。日志目录中的文件按修改时间从旧到新作为普通候选处理，因此旧日志通常会先被清理。未超过触发值时写入 scan，触发清理后写入 summary；预演或成功删除的每个文件另写一条 delete 事件；锁定、权限不足、文件变化和删除失败会写入 failures。触发清理的 summary 还会给出 `current_bytes`、`planned_files`、`planned_bytes` 以及计划文件的 `planned_mod_time_from`/`planned_mod_time_to`，便于一行查看当前大小、计划数量、计划容量和文件时间范围；真实删除时另有 `deleted_mod_time_from`/`deleted_mod_time_to` 表示实际删除成功文件的时间范围。预演只列出达到目标容量所需的文件，`after_bytes` 仍反映实际容量，实际删除数量保持为零。
+`audit_log_dir` 是 JSONL 审计日志目录。程序每次启动和轮转时直接创建新的时间戳文件；同一秒内追加序号。重启不会追加旧日志。日志目录中的文件按修改时间从旧到新作为普通候选处理，因此旧日志通常会先被清理。未超过触发值时写入 scan，触发清理后写入 summary；预演或成功删除的每个文件另写一条 delete 事件；锁定、权限不足、文件变化和删除失败会写入 failures。触发清理的 summary 还会给出 `current_bytes`、`planned_files`、`planned_bytes` 以及计划文件的 `planned_mod_time_from`/`planned_mod_time_to`，便于一行查看当前大小、计划数量、计划容量和文件时间范围。`planned_*` 只统计通过删除前最终复核的候选；dry-run 中表示计划删除的文件，真实执行中即使后续系统删除失败仍计入计划统计。真实删除时另有 `deleted_mod_time_from`/`deleted_mod_time_to` 表示实际删除成功文件的时间范围。预演只列出达到目标容量所需的文件，`after_bytes` 仍反映实际容量，实际删除数量保持为零。
 
 ## 开发和测试
 

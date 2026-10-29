@@ -144,9 +144,18 @@ type stabilityResult struct {
 	ready  bool
 	reason string
 }
-type Scanner struct{ logger *Logger }
+type removalResult struct {
+	validated bool
+	deleted   bool
+}
+type Scanner struct {
+	logger          *Logger
+	removeCandidate func(string, int64, time.Time, bool) (removalResult, error)
+}
 
-func NewScanner(logger *Logger) *Scanner { return &Scanner{logger: logger} }
+func NewScanner(logger *Logger) *Scanner {
+	return &Scanner{logger: logger, removeCandidate: remove}
+}
 func (s *Scanner) Run(ctx context.Context, dir config.ResolvedDirectory) {
 	ticker := time.NewTicker(dir.ScanInterval)
 	defer ticker.Stop()
@@ -191,17 +200,19 @@ func (s *Scanner) scan(ctx context.Context, dir config.ResolvedDirectory) {
 			event.Failures = append(event.Failures, candidate.Path+": "+reason)
 			continue
 		}
-		plannedFiles++
-		plannedBytes += candidate.Size
-		if plannedFrom == nil || candidate.ModTime.Before(*plannedFrom) {
-			modTime := candidate.ModTime
-			plannedFrom = &modTime
+		result, err := s.removeCandidate(candidate.Path, candidate.Size, candidate.ModTime, dir.DryRun)
+		if result.validated {
+			plannedFiles++
+			plannedBytes += candidate.Size
+			if plannedFrom == nil || candidate.ModTime.Before(*plannedFrom) {
+				modTime := candidate.ModTime
+				plannedFrom = &modTime
+			}
+			if plannedTo == nil || candidate.ModTime.After(*plannedTo) {
+				modTime := candidate.ModTime
+				plannedTo = &modTime
+			}
 		}
-		if plannedTo == nil || candidate.ModTime.After(*plannedTo) {
-			modTime := candidate.ModTime
-			plannedTo = &modTime
-		}
-		deleted, err := remove(candidate.Path, candidate.Size, candidate.ModTime, dir.DryRun)
 		if err != nil {
 			event.Failures = append(event.Failures, candidate.Path+": "+err.Error())
 			continue
@@ -226,7 +237,7 @@ func (s *Scanner) scan(ctx context.Context, dir config.ResolvedDirectory) {
 			event.DeletedBytes += candidate.Size
 			event.DeletedFiles++
 		}
-		if deleted || dir.DryRun {
+		if result.deleted || dir.DryRun {
 			_ = s.logger.Write(fileEvent)
 		}
 	}
@@ -248,45 +259,27 @@ func checkStability(ctx context.Context, candidates []fileCandidate, dir config.
 	results := make([]stabilityResult, len(candidates))
 	eligible := make([]int, 0, len(candidates))
 	var eligibleMu sync.Mutex
-	jobs := make(chan int)
-	var wg sync.WaitGroup
-	workers := dir.MaxWorkers
-	if workers > len(candidates) {
-		workers = len(candidates)
-	}
-	for worker := 0; worker < workers; worker++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for index := range jobs {
-				if ctx.Err() != nil {
-					results[index] = stabilityResult{reason: "cancelled"}
-					continue
-				}
-				candidate := candidates[index]
-				if time.Since(candidate.ModTime) < dir.MinAge {
-					results[index] = stabilityResult{reason: "too_young"}
-					continue
-				}
-				if err := checkPlatformAccess(candidate.Path); err != nil {
-					results[index] = stabilityResult{reason: "locked_or_inaccessible: " + err.Error()}
-					continue
-				}
-				eligibleMu.Lock()
-				eligible = append(eligible, index)
-				eligibleMu.Unlock()
-			}
-		}()
-	}
-	for index := range candidates {
-		select {
-		case jobs <- index:
-		case <-ctx.Done():
+	unsubmitted := runIndexed(ctx, len(candidates), dir.MaxWorkers, func(index int) {
+		if ctx.Err() != nil {
 			results[index] = stabilityResult{reason: "cancelled"}
+			return
 		}
+		candidate := candidates[index]
+		if time.Since(candidate.ModTime) < dir.MinAge {
+			results[index] = stabilityResult{reason: "too_young"}
+			return
+		}
+		if err := checkPlatformAccess(candidate.Path); err != nil {
+			results[index] = stabilityResult{reason: "locked_or_inaccessible: " + err.Error()}
+			return
+		}
+		eligibleMu.Lock()
+		eligible = append(eligible, index)
+		eligibleMu.Unlock()
+	})
+	for index := unsubmitted; index < len(candidates); index++ {
+		results[index] = stabilityResult{reason: "cancelled"}
 	}
-	close(jobs)
-	wg.Wait()
 	if ctx.Err() != nil || len(eligible) == 0 {
 		return results
 	}
@@ -305,41 +298,54 @@ func checkStability(ctx context.Context, candidates []fileCandidate, dir config.
 		}
 	}
 
-	jobs = make(chan int)
-	wg = sync.WaitGroup{}
-	workers = dir.MaxWorkers
-	if workers > len(eligible) {
-		workers = len(eligible)
+	unsubmitted = runIndexed(ctx, len(eligible), dir.MaxWorkers, func(position int) {
+		index := eligible[position]
+		if ctx.Err() != nil {
+			results[index] = stabilityResult{reason: "cancelled"}
+			return
+		}
+		candidate := candidates[index]
+		ready, reason := verifyStable(ctx, candidate.Path, candidate.Size, candidate.ModTime)
+		results[index] = stabilityResult{ready: ready, reason: reason}
+	})
+	for _, index := range eligible[unsubmitted:] {
+		results[index] = stabilityResult{reason: "cancelled"}
 	}
+	return results
+}
+
+func runIndexed(ctx context.Context, count, maxWorkers int, fn func(int)) int {
+	if count == 0 {
+		return 0
+	}
+	workers := maxWorkers
+	if workers > count {
+		workers = count
+	}
+	jobs := make(chan int)
+	var wg sync.WaitGroup
 	for worker := 0; worker < workers; worker++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for index := range jobs {
-				if ctx.Err() != nil {
-					results[index] = stabilityResult{reason: "cancelled"}
-					continue
-				}
-				candidate := candidates[index]
-				ready, reason := verifyStable(ctx, candidate.Path, candidate.Size, candidate.ModTime)
-				results[index] = stabilityResult{ready: ready, reason: reason}
+				fn(index)
 			}
 		}()
 	}
+	next := 0
 dispatch:
-	for position, index := range eligible {
+	for next < count {
 		select {
-		case jobs <- index:
+		case jobs <- next:
+			next++
 		case <-ctx.Done():
-			for _, pending := range eligible[position:] {
-				results[pending] = stabilityResult{reason: "cancelled"}
-			}
 			break dispatch
 		}
 	}
 	close(jobs)
 	wg.Wait()
-	return results
+	return next
 }
 
 func collect(root string) ([]fileCandidate, int64, []string) {
@@ -410,25 +416,25 @@ func verifyStable(ctx context.Context, path string, expectedSize int64, expected
 	}
 	return true, ""
 }
-func remove(path string, expectedSize int64, expectedMod time.Time, dryRun bool) (bool, error) {
+func remove(path string, expectedSize int64, expectedMod time.Time, dryRun bool) (removalResult, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
-		return false, err
+		return removalResult{}, err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return false, fmt.Errorf("symlink")
+		return removalResult{}, fmt.Errorf("symlink")
 	}
 	if info.Size() != expectedSize || !info.ModTime().Equal(expectedMod) {
-		return false, fmt.Errorf("changed_before_delete")
+		return removalResult{}, fmt.Errorf("changed_before_delete")
 	}
 	if err := checkPlatformAccess(path); err != nil {
-		return false, err
+		return removalResult{}, err
 	}
 	if dryRun {
-		return true, nil
+		return removalResult{validated: true}, nil
 	}
 	if err := os.Remove(path); err != nil {
-		return false, err
+		return removalResult{validated: true}, err
 	}
-	return true, nil
+	return removalResult{validated: true, deleted: true}, nil
 }
