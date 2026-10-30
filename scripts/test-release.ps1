@@ -88,7 +88,7 @@ try {
         $archive = Join-Path $ReleaseDirectory $archiveName
         $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
         Assert ((@($checksums | Where-Object { $_ -ceq "$hash  $archiveName" })).Count -eq 1) "Checksum mismatch: $target"
-        $files = @('README.md', 'VERSION.json', 'directory-cleaner.yaml.example', 'licenses/Go-LICENSE.txt', 'licenses/yaml-LICENSE.txt', 'licenses/yaml-NOTICE.txt')
+        $files = @('README.md', 'LICENSE', 'VERSION.json', 'directory-cleaner.yaml.example', 'licenses/Go-LICENSE.txt', 'licenses/yaml-LICENSE.txt', 'licenses/yaml-NOTICE.txt')
         if ($os -eq 'windows') {
             $exe = 'dircleaner.exe'
             $files += @($exe, 'start.ps1', 'deploy/install-nssm.ps1', 'tools/nssm.exe', 'licenses/NSSM-README.txt')
