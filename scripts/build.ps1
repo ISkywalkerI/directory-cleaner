@@ -88,6 +88,7 @@ try {
             go_version = 'go1.25.12'; goos = $env:GOOS; goarch = $env:GOARCH; cgo_enabled = 0
         }
         Write-Text "$root/VERSION.json" ($metadata | ConvertTo-Json)
+        Copy-Item -LiteralPath LICENSE -Destination "$root/LICENSE"
         Copy-Item -LiteralPath "$yaml/LICENSE" -Destination "$root/licenses/yaml-LICENSE.txt"
         Copy-Item -LiteralPath "$yaml/NOTICE" -Destination "$root/licenses/yaml-NOTICE.txt"
         Copy-Item -LiteralPath "$goRoot/LICENSE" -Destination "$root/licenses/Go-LICENSE.txt"

@@ -41,7 +41,7 @@ Windows 的 `-ExecutionPolicy Bypass` 仅作用于当前启动进程，不修改
 包内 `tools/nssm.exe` 为固定版 2.24-101-g897c7ad 的 x64 程序。管理员 PowerShell 执行：
 
 ```powershell
-.\deploy\install-nssm.ps1 -Root C:\Apps\directory-cleaner
+.\deploy\install-nssm.ps1
 Get-Service DirectoryCleaner
 Stop-Service DirectoryCleaner
 Start-Service DirectoryCleaner
